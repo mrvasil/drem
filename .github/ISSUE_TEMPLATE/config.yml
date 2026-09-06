@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Troubleshooting
+    url: https://github.com/mrvasil/drem/blob/main/docs/TROUBLESHOOTING.md
+    about: Status detection, sleep recovery and build help.
+  - name: Sensitive security report
+    url: https://github.com/mrvasil/drem/blob/main/SECURITY.md
+    about: Read the reporting policy before sharing sensitive details.

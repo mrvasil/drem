@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 460" role="img" aria-labelledby="title desc">
+  <title id="title">drem</title>
+  <desc id="desc">Let agents work. Let your Mac rest. A native macOS utility for Codex and Claude Code.</desc>
+  <rect width="1280" height="460" rx="24" fill="#f5f5f2"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">
+    <text x="76" y="82" fill="#646660" font-size="15" letter-spacing="4">A LITTLE SPACE TO SWITCH OFF</text>
+    <text x="70" y="228" fill="#202124" font-size="154" font-weight="600" letter-spacing="-9">drem</text>
+    <text x="78" y="286" fill="#202124" font-size="29">Let agents work. Let your Mac rest.</text>
+    <path d="M 0 7.4 C 1.008 1.776 1.512 1.184 6.3 0 C 1.512 -1.184 1.008 -1.776 0 -7.4 C -1.008 -1.776 -1.512 -1.184 -6.3 0 C -1.512 1.184 -1.008 1.776 0 7.4 Z" transform="translate(1050 199) scale(15 -15) rotate(-9)" fill="#f8d849"/>
+    <path d="M 78 360 H 1202" stroke="#dedfd8"/>
+    <text x="78" y="405" fill="#646660" font-size="14" letter-spacing="2">CODEX + CLAUDE CODE</text>
+    <text x="562" y="405" fill="#646660" font-size="14" letter-spacing="2">NATIVE macOS</text>
+    <text x="1000" y="405" fill="#646660" font-size="14" letter-spacing="2">LOCAL-FIRST</text>
+  </g>
+</svg>

@@ -1,0 +1,41 @@
+name: Bug report
+description: Report an incorrect agent status, sleep behavior or UI problem.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Russian or English is fine. Do not attach raw transcripts, auth files,
+        credentials, full process listings or private project paths.
+  - type: input
+    id: version
+    attributes:
+      label: App version and macOS
+      placeholder: "drem 1.4.5, macOS 26, Apple Silicon"
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent and version
+      placeholder: "Codex / Claude Code; local CLI or another host"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the selected sleep mode and whether the lid was closed.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Optional screenshots or minimal synthetic events. Remove private data.

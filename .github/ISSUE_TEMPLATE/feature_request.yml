@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest an improvement to drem.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Russian or English is fine. Describe the problem first.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: How would this work in the menu bar or settings?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and tradeoffs
+      description: Consider background cost, permissions and macOS conventions.
