@@ -19,6 +19,11 @@ The application UI is currently in Russian. Upgrading from Agent Watch imports
 sleep, appearance and recovery preferences without deleting the old settings.
 The installer replaces old hooks while preserving unrelated handlers.
 
+<p align="center">
+  <img src="assets/menu-bar.jpeg" alt="drem menu showing Codex, Claude Code and the sleep controls" width="360">
+  <br><sub>The actual drem 1.5.0 popover. Project folder names appear below each agent.</sub>
+</p>
+
 ## What it does
 
 - Distinguishes working, waiting and offline agents.
