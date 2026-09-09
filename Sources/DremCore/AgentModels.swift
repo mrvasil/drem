@@ -43,6 +43,7 @@ public struct DetectedAgentProcess: Codable, Identifiable, Equatable, Sendable {
     public let workingDirectory: String?
     public let openTranscriptPaths: [String]
     public let sessionIDHint: String?
+    public let startedAt: Date?
 
     public init(
         id: Int32,
@@ -53,7 +54,8 @@ public struct DetectedAgentProcess: Codable, Identifiable, Equatable, Sendable {
         command: String,
         workingDirectory: String? = nil,
         openTranscriptPaths: [String] = [],
-        sessionIDHint: String? = nil
+        sessionIDHint: String? = nil,
+        startedAt: Date? = nil
     ) {
         self.id = id
         self.parentPID = parentPID
@@ -64,6 +66,7 @@ public struct DetectedAgentProcess: Codable, Identifiable, Equatable, Sendable {
         self.workingDirectory = workingDirectory
         self.openTranscriptPaths = openTranscriptPaths
         self.sessionIDHint = sessionIDHint
+        self.startedAt = startedAt
     }
 }
 

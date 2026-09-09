@@ -80,7 +80,8 @@ final class AgentMonitor: ObservableObject {
 
         let candidates = hookStore.observedDirectoryURLs.map(\.path) + [
             home.appendingPathComponent(".codex/sessions", isDirectory: true).path,
-            home.appendingPathComponent(".claude/projects", isDirectory: true).path
+            home.appendingPathComponent(".claude/projects", isDirectory: true).path,
+            home.appendingPathComponent(".claude/sessions", isDirectory: true).path
         ]
         let paths = candidates.filter { FileManager.default.fileExists(atPath: $0) }
 

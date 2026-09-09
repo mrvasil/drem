@@ -54,7 +54,8 @@ public struct ProcessScanner: Sendable {
                     command: item.command,
                     workingDirectory: details?.workingDirectory,
                     openTranscriptPaths: details.map { Array($0.transcriptPaths).sorted() } ?? [],
-                    sessionIDHint: item.sessionIDHint
+                    sessionIDHint: item.sessionIDHint,
+                    startedAt: ProcessLiveness.startTime(item.id)
                 )
             }
             .sorted { lhs, rhs in

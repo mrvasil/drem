@@ -35,6 +35,7 @@ public struct ActivityLogScanner: Sendable {
     }
 
     public func scan(processes: [DetectedAgentProcess]) -> AgentSnapshot {
+        let processes = ClaudeSessionRegistry(homeDirectory: homeDirectory).applying(to: processes)
         let hookSessions = HookStateStore(homeDirectory: homeDirectory).readValid(processes: processes)
         let transcriptSessions = scanTranscriptRecords(processes: processes)
         let statuses = AgentKind.allCases.map { kind in
@@ -73,7 +74,11 @@ public struct ActivityLogScanner: Sendable {
         let sessions = AgentActivityEvidence.merge(
             hooks: hookSessions.filter { $0.kind == kind },
             transcripts: transcriptSessions.map(\.session).filter { $0.kind == kind }
-        )
+        ).map { session in
+            AgentActivityEvidence.forProcessLifetime(
+                session, startedAt: kindProcesses.first { $0.id == session.processID }?.startedAt
+            )
+        }
 
         return AgentStatus(
             kind: kind,
@@ -87,8 +92,7 @@ public struct ActivityLogScanner: Sendable {
         kind: AgentKind,
         processes: [DetectedAgentProcess]
     ) -> [TranscriptActivityRecord] {
-        let processDirectories = Set(processes.compactMap { normalizedPath($0.workingDirectory) })
-        guard !processDirectories.isEmpty else { return [] }
+        guard !processes.isEmpty else { return [] }
 
         let root: URL
         switch kind {
@@ -98,20 +102,42 @@ public struct ActivityLogScanner: Sendable {
             root = homeDirectory.appendingPathComponent(".claude/projects", isDirectory: true)
         }
 
-        let candidates = recentJSONLFiles(at: root, limit: 40)
+        // The recent-history limit is for discovery, never for files already
+        // held by a live agent. An older idle session can still have a stale hook.
+        let openPaths = Set(processes.flatMap(\.openTranscriptPaths).map {
+            URL(fileURLWithPath: $0).standardizedFileURL.path
+        })
+        let openFiles: [(url: URL, modifiedAt: Date)] = openPaths.compactMap { path in
+            let url = URL(fileURLWithPath: path)
+            guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]),
+                  values.isRegularFile == true, let date = values.contentModificationDate else { return nil }
+            return (url, date)
+        }
+        let candidates = (openFiles + recentJSONLFiles(
+            at: root, limit: 40, sessionIDs: Set(processes.compactMap(\.sessionIDHint))
+        ).filter {
+            !openPaths.contains($0.url.standardizedFileURL.path)
+        }).sorted { $0.modifiedAt > $1.modifiedAt }
         var results: [TranscriptActivityRecord] = []
         var newestByDirectory: [String: Date] = [:]
 
         for candidate in candidates {
             guard let metadata = metadata(for: candidate.url, kind: kind),
-                  let cwd = normalizedPath(metadata.cwd),
-                  processDirectories.contains(cwd) else {
+                  let cwd = normalizedPath(metadata.cwd) else {
                 continue
             }
 
-            if let newest = newestByDirectory[cwd], newest > candidate.modifiedAt {
+            let exactProcessID = processID(
+                for: candidate.url, sessionID: metadata.sessionID, cwd: cwd,
+                processes: processes, allowDirectoryFallback: false
+            )
+            if exactProcessID == nil, let newest = newestByDirectory[cwd], newest > candidate.modifiedAt {
                 continue
             }
+
+            guard let processID = exactProcessID ?? processID(
+                for: candidate.url, sessionID: metadata.sessionID, cwd: cwd, processes: processes
+            ) else { continue }
 
             guard let tail = readTail(candidate.url),
                   let evidence = kind == .codex
@@ -120,13 +146,7 @@ public struct ActivityLogScanner: Sendable {
                 continue
             }
 
-            guard let processID = processID(
-                for: candidate.url,
-                sessionID: metadata.sessionID,
-                cwd: cwd,
-                processes: processes
-            ) else { continue }
-            newestByDirectory[cwd] = candidate.modifiedAt
+            if exactProcessID == nil { newestByDirectory[cwd] = candidate.modifiedAt }
             results.append(
                 TranscriptActivityRecord(
                     session: AgentSessionActivity(
@@ -151,7 +171,8 @@ public struct ActivityLogScanner: Sendable {
         for transcript: URL,
         sessionID: String,
         cwd: String,
-        processes: [DetectedAgentProcess]
+        processes: [DetectedAgentProcess],
+        allowDirectoryFallback: Bool = true
     ) -> Int32? {
         let transcriptPath = transcript.standardizedFileURL.path
         let openFileMatches = processes.filter { process in
@@ -164,6 +185,7 @@ public struct ActivityLogScanner: Sendable {
         let hintedMatches = processes.filter { $0.sessionIDHint == sessionID }
         if hintedMatches.count == 1 { return hintedMatches[0].id }
 
+        guard allowDirectoryFallback else { return nil }
         let cwdMatches = processes.filter {
             normalizedPath($0.workingDirectory) == cwd
         }
@@ -173,6 +195,7 @@ public struct ActivityLogScanner: Sendable {
         if let sessionIDHint = process.sessionIDHint {
             return sessionIDHint == sessionID ? process.id : nil
         }
+        guard process.openTranscriptPaths.isEmpty else { return nil }
         return process.id
     }
 
@@ -284,7 +307,11 @@ public struct ActivityLogScanner: Sendable {
         return nil
     }
 
-    private func recentJSONLFiles(at root: URL, limit: Int) -> [(url: URL, modifiedAt: Date)] {
+    private func recentJSONLFiles(
+        at root: URL,
+        limit: Int,
+        sessionIDs: Set<String>
+    ) -> [(url: URL, modifiedAt: Date)] {
         guard let enumerator = fileManager.enumerator(
             at: root,
             includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
@@ -299,7 +326,13 @@ public struct ActivityLogScanner: Sendable {
             result.append((url, date))
         }
 
-        return result.sorted { $0.1 > $1.1 }.prefix(limit).map { $0 }
+        let sorted = result.sorted { $0.1 > $1.1 }
+        let bound = sorted.dropFirst(limit).filter { url, _ in
+            let name = url.deletingPathExtension().lastPathComponent
+            return sessionIDs.contains(name)
+                || (name.hasPrefix("rollout-") && sessionIDs.contains { name.hasSuffix("-" + $0) })
+        }
+        return Array(sorted.prefix(limit)) + bound
     }
 
     private func readHead(_ url: URL, limit: Int = 128 * 1_024) -> String? {

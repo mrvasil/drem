@@ -43,6 +43,7 @@ public actor LiveActivityEngine {
     }
 
     public func reconcile(processes: [DetectedAgentProcess]) -> LiveActivityState {
+        let processes = ClaudeSessionRegistry(homeDirectory: homeDirectory).applying(to: processes)
         self.processes = processes
         let transcriptRecords = ActivityLogScanner(homeDirectory: homeDirectory)
             .scanTranscriptRecords(processes: processes)
@@ -70,7 +71,8 @@ public actor LiveActivityEngine {
     }
 
     public func handleFileEvents(_ paths: [String]) -> LiveActivityState {
-        var needsReconciliation = false
+        var needsReconciliation = ClaudeSessionRegistry(homeDirectory: homeDirectory)
+            .needsDiscovery(for: paths, processes: processes)
 
         for path in Set(paths) {
             guard let kind = transcriptKind(for: path) else { continue }
@@ -107,7 +109,6 @@ public actor LiveActivityEngine {
             if !result.wasIncremental ||
                 !hasMatchingProcess(
                     kind: kind,
-                    workingDirectory: result.workingDirectory,
                     processID: linkedProcessID
                 ) {
                 needsReconciliation = true
@@ -126,8 +127,7 @@ public actor LiveActivityEngine {
         for record in hookRecords where now.timeIntervalSince(record.updatedAt) < 5 {
             if !hasMatchingProcess(
                 kind: record.kind,
-                workingDirectory: record.cwd,
-                processID: record.processID
+                processID: record.processID ?? hookProcessIDs[SessionKey(kind: record.kind, id: record.sessionID)]
             ) {
                 needsReconciliation = true
             }
@@ -213,7 +213,6 @@ public actor LiveActivityEngine {
                 let linkedProcessID = record.processID ?? hookProcessIDs[key]
                 let matches = hasMatchingProcess(
                     kind: record.kind,
-                    workingDirectory: record.cwd,
                     processID: linkedProcessID
                 )
                 let isFresh = now.timeIntervalSince(record.updatedAt) < freshInterval
@@ -236,7 +235,6 @@ public actor LiveActivityEngine {
 
                 let matches = hasMatchingProcess(
                     kind: kind,
-                    workingDirectory: tracked.workingDirectory,
                     processID: session.processID
                 )
                 let isFresh = now.timeIntervalSince(session.updatedAt) < freshInterval
@@ -244,7 +242,11 @@ public actor LiveActivityEngine {
                 return session
             }
 
-            let sessions = AgentActivityEvidence.merge(hooks: hooks, transcripts: transcripts)
+            let sessions = AgentActivityEvidence.merge(hooks: hooks, transcripts: transcripts).map { session in
+                AgentActivityEvidence.forProcessLifetime(
+                    session, startedAt: kindProcesses.first { $0.id == session.processID }?.startedAt
+                )
+            }
             let state: AgentActivity
             if kindProcesses.isEmpty && sessions.isEmpty {
                 state = .offline
@@ -275,39 +277,42 @@ public actor LiveActivityEngine {
 
     private func hasMatchingProcess(
         kind: AgentKind,
-        workingDirectory: String?,
         processID: Int32?
     ) -> Bool {
-        let candidates = processes.filter { $0.kind == kind }
-        if let processID {
-            return candidates.contains { $0.id == processID }
-        }
-
-        guard let workingDirectory else { return !candidates.isEmpty }
-        let normalizedDirectory = normalizedPath(workingDirectory)
-        let knownDirectories = candidates.compactMap { $0.workingDirectory.map(normalizedPath) }
-        return knownDirectories.isEmpty || knownDirectories.contains(normalizedDirectory)
+        // An open agent in the same folder does not prove this session exists.
+        // Binding must happen first; otherwise orphaned hooks live indefinitely.
+        guard let processID else { return false }
+        return processes.contains { $0.kind == kind && $0.id == processID }
     }
 
     private func matchingProcessID(
         kind: AgentKind,
         sessionID: String,
         workingDirectory: String,
-        transcriptPath: String?
+        transcriptPath: String?,
+        allowDirectoryFallback: Bool = true
     ) -> Int32? {
         let candidates = processes.filter { $0.kind == kind }
 
-        if let transcriptPath {
-            let normalizedTranscript = normalizedPath(transcriptPath)
-            let openFileMatches = candidates.filter { process in
-                process.openTranscriptPaths.contains { normalizedPath($0) == normalizedTranscript }
+        let openFileMatches = candidates.filter { process in
+            process.openTranscriptPaths.contains { path in
+                if let transcriptPath {
+                    return normalizedPath(path) == normalizedPath(transcriptPath)
+                }
+                // Hook payloads have a session ID but no transcript path. Both
+                // agents include that ID in the open log's filename, even when
+                // its original metadata cwd predates a project rename.
+                let name = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+                return name == sessionID || (kind == .codex
+                    && name.hasPrefix("rollout-") && name.hasSuffix("-" + sessionID))
             }
-            if openFileMatches.count == 1 { return openFileMatches[0].id }
         }
+        if openFileMatches.count == 1 { return openFileMatches[0].id }
 
         let hintedMatches = candidates.filter { $0.sessionIDHint == sessionID }
         if hintedMatches.count == 1 { return hintedMatches[0].id }
 
+        guard allowDirectoryFallback else { return nil }
         let normalizedDirectory = normalizedPath(workingDirectory)
         let cwdMatches = candidates.filter {
             $0.workingDirectory.map(normalizedPath) == normalizedDirectory
@@ -318,6 +323,7 @@ public actor LiveActivityEngine {
         if let sessionIDHint = process.sessionIDHint {
             return sessionIDHint == sessionID ? process.id : nil
         }
+        guard process.openTranscriptPaths.isEmpty else { return nil }
         return process.id
     }
 
@@ -337,7 +343,8 @@ public actor LiveActivityEngine {
                     kind: record.kind,
                     sessionID: record.sessionID,
                     workingDirectory: record.cwd,
-                    transcriptPath: nil
+                    transcriptPath: nil,
+                    allowDirectoryFallback: false
                 )
             if let linkedProcessID {
                 hookProcessIDs[key] = linkedProcessID
