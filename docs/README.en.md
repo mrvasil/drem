@@ -43,7 +43,13 @@ release assertions owned by other applications.
 
 ## Build and install
 
-Requires macOS 13+, Git, Python 3 and an Apple developer toolchain with Swift 6+.
+Ready-made releases target **Apple Silicon**. Download the ZIP and checksum from
+the [latest release](https://github.com/mrvasil/drem/releases/latest), move
+`drem.app` to `~/Applications` and follow the bundled `README.txt`.
+The ad-hoc signature may require **Control-click → Open** on first launch; do not
+disable Gatekeeper globally.
+
+Building from source requires macOS 13+, Git, Python 3 and an Apple developer toolchain with Swift 6+.
 Tests require macOS 14+.
 
 ```sh
@@ -65,10 +71,11 @@ make run     # Build and launch without installing hooks
 make check   # Repository checks and isolated installer tests
 make test    # Core and Swift Testing suites
 make build   # dist/drem.app
+make package # verified Apple Silicon ZIP and SHA-256 checksum
 ```
 
-Builds target the host architecture. Local and CI builds are ad-hoc signed,
-not notarized Developer ID releases.
+Published artifacts target Apple Silicon only. Local and CI builds are ad-hoc
+signed, not notarized Developer ID releases.
 
 ## Set it and leave it
 

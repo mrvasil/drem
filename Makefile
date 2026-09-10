@@ -1,4 +1,4 @@
-.PHONY: check test build run install
+.PHONY: check test build package run install
 
 check:
 	python3 scripts/check-repository.py
@@ -10,6 +10,9 @@ test:
 
 build:
 	./scripts/build-app.sh
+
+package: build
+	./scripts/package-release.sh "$(VERSION)"
 
 run: build
 	open "$(CURDIR)/dist/drem.app"

@@ -16,16 +16,8 @@ concurrency:
 
 jobs:
   build:
-    name: Build and test (${{ matrix.arch }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            arch: arm64
-          - runner: macos-15-intel
-            arch: x86_64
-    runs-on: ${{ matrix.runner }}
+    name: Build and test (arm64)
+    runs-on: macos-15
     timeout-minutes: 20
     steps:
       - name: Check out source
@@ -45,17 +37,12 @@ jobs:
         run: swift build -c release -Xswiftc -warnings-as-errors
       - name: Package and verify
         run: |
-          make build
+          make package
           codesign --verify --deep --strict --verbose=2 "dist/drem.app"
-          /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "dist/drem.app/Contents/Info.plist"
-          mkdir -p dist/package
-          ditto "dist/drem.app" "dist/package/drem.app"
-          cp LICENSE THIRD_PARTY_NOTICES.md dist/package/
-          ditto -c -k --sequesterRsrc dist/package "dist/drem-${{ matrix.arch }}.zip"
       - name: Upload test build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: drem-${{ matrix.arch }}
-          path: dist/drem-${{ matrix.arch }}.zip
+          name: drem-arm64
+          path: dist/release/*
           if-no-files-found: error
           retention-days: 7

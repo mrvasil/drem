@@ -57,7 +57,14 @@
 
 ## Установка
 
-Нужны macOS 13+, Git, Python 3 и инструменты разработчика Apple со Swift 6+.
+Готовая сборка выпускается для **Apple Silicon**. Скачай ZIP из
+[последнего релиза](https://github.com/mrvasil/drem/releases/latest), перенеси
+`drem.app` в `~/Applications` и следуй `README.txt` внутри архива.
+Из-за ad-hoc подписи при первом запуске может понадобиться
+**Control-click → Открыть**. Не отключай Gatekeeper целиком.
+
+Для сборки из исходников нужны macOS 13+, Git, Python 3 и инструменты
+разработчика Apple со Swift 6+.
 Для запуска тестов нужна macOS 14+. Подойдут актуальные Xcode или Command Line Tools:
 
 ```sh
@@ -89,13 +96,13 @@ make install
 
 ```sh
 make build   # dist/drem.app
+make package # проверенный ZIP для Apple Silicon
 make run     # собрать и открыть без изменения конфигов агентов
 make test    # самопроверки и автоматические тесты
 ```
 
-Сборка создаётся для архитектуры текущего Mac. Для распространения между
-Apple Silicon и Intel нужны соответствующие сборки. Локальная ad-hoc подпись
-не является Developer ID подписью или notarization.
+Официальные артефакты проекта выпускаются только для Apple Silicon.
+Локальная ad-hoc подпись не является Developer ID подписью или notarization.
 
 </details>
 
@@ -160,8 +167,8 @@ make test
 make build
 ```
 
-CI проверяет исходники и собирает приложение на Apple Silicon и Intel.
-Результат сборки доступен как ZIP-артефакт соответствующего запуска.
+CI проверяет исходники и собирает приложение на Apple Silicon. Теги вида
+`v1.6.0` автоматически создают GitHub Release с ZIP и SHA-256 checksum.
 
 [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) ·
 [Сообщить об ошибке](https://github.com/mrvasil/drem/issues/new/choose) ·

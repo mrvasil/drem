@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish Apple Silicon release
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate tag and bundle version
+        id: version
+        shell: zsh
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          bundle_version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Resources/Info.plist)"
+          [[ "$version" == "$bundle_version" ]]
+          [[ "$(git tag --points-at HEAD)" == *"$GITHUB_REF_NAME"* ]]
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Toolchain
+        run: |
+          sw_vers
+          swift --version
+          python3 --version
+      - name: Repository and installer checks
+        run: make check
+      - name: Core and behavior tests
+        run: make test
+      - name: Release build with warnings as errors
+        run: swift build -c release -Xswiftc -warnings-as-errors
+      - name: Package and verify
+        run: make package VERSION="${{ steps.version.outputs.version }}"
+      - name: Upload release candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: drem-${{ steps.version.outputs.version }}-macOS-arm64
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: zsh
+        run: |
+          notes="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes" <<EOF
+          Ready-to-run build for Apple Silicon Macs.
+
+          The app is ad-hoc signed, not notarized with Apple Developer ID. On first launch, macOS may require **Control-click → Open**. Do not disable Gatekeeper globally.
+
+          The ZIP also contains the hook installer, license, attribution, and installation notes.
+          EOF
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/release/drem-$VERSION-macOS-arm64.zip" \
+            "dist/release/SHA256SUMS.txt" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "drem $VERSION" \
+            --notes "$(cat "$notes")" \
+            --generate-notes

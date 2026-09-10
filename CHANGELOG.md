@@ -3,7 +3,7 @@
 User-visible changes are recorded here. Version numbers correspond to the
 application bundle.
 
-## 1.6.0 — 2026-09-09
+## 1.6.0 — 2026-09-10
 
 ### Added
 
@@ -15,6 +15,10 @@ application bundle.
 ### Fixed
 
 - Keep Codex marked as working when an automatic continuation after compaction starts real reasoning or tool work without another user-prompt hook.
+
+### Distribution
+
+- Publish verified Apple Silicon ZIP releases with SHA-256 checksums from version-matched Git tags.
 
 ## 1.5.2 — 2026-09-07
 
