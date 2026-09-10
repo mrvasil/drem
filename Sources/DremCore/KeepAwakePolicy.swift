@@ -75,6 +75,14 @@ public enum KeepAwakeAgentPolicy {
     public static func requiresClamshell(manualPreference: Bool, agentRequiresWake: Bool) -> Bool {
         manualPreference || agentRequiresWake
     }
+
+    public static func shouldAllowDisplaySleep(
+        userPreference: Bool,
+        awayModeEnabled: Bool,
+        screenLocked: Bool
+    ) -> Bool {
+        userPreference || (awayModeEnabled && screenLocked)
+    }
 }
 
 /// One system write at a time. Changes arriving during a write are coalesced

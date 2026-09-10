@@ -209,12 +209,20 @@ public struct ActivityLogScanner: Sendable {
     ) -> TranscriptActivityEvidence? {
         var state: AgentActivity?
         var timestamp: String?
+        var acceptsWorkAfterBoundary = false
 
         for object in JSONObjects.lines(in: text) {
             var eventState: AgentActivity?
             let type = object["type"] as? String
             let payload = object["payload"] as? [String: Any]
             let payloadType = payload?["type"] as? String
+
+            if type == "turn_context" {
+                // Compaction and automatic continuations can begin a new
+                // agent turn without another task_started/user record. Arm
+                // only the next real work item; the boundary alone is idle.
+                acceptsWorkAfterBoundary = true
+            }
 
             if type == "event_msg" {
                 if payloadType == "task_started" {
@@ -234,10 +242,11 @@ public struct ActivityLogScanner: Sendable {
                 }
             }
             if type == "response_item", eventState == nil,
-               (state ?? previousState) != .idle {
+               acceptsWorkAfterBoundary || (state ?? previousState) != .idle {
                 // A long task may have pushed task_started outside the bounded
-                // window. Actual reasoning/tool work still proves activity.
-                // Once terminal, late outputs cannot reopen that task.
+                // window. Actual reasoning/tool work still proves activity,
+                // including after a new turn_context. Without that boundary,
+                // late outputs cannot reopen a terminal task.
                 if ["reasoning", "function_call", "function_call_output",
                     "custom_tool_call", "custom_tool_call_output"].contains(payloadType ?? "")
                     || (payloadType == "message"
@@ -249,6 +258,7 @@ public struct ActivityLogScanner: Sendable {
             if let eventState {
                 state = eventState
                 timestamp = object["timestamp"] as? String
+                acceptsWorkAfterBoundary = false
             }
         }
 

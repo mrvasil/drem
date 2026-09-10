@@ -21,6 +21,8 @@ final class DremAppDelegate: NSObject, NSApplicationDelegate, UNUserNotification
     private var statusController: StatusItemController?
     private var agentActivitySubscription: AnyCancellable?
     private var closedLidBrightness: ClosedLidBrightnessController?
+    private var lidStateMonitor: LidStateMonitor?
+    private var awayMode: AwayModeController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -29,18 +31,29 @@ final class DremAppDelegate: NSObject, NSApplicationDelegate, UNUserNotification
 
         let monitor = AgentMonitor()
         let keepAwake = KeepAwakeManager.shared
+        let lidStateMonitor = LidStateMonitor()
+        let awayMode = AwayModeController(keepAwake: keepAwake)
         self.monitor = monitor
+        self.lidStateMonitor = lidStateMonitor
+        self.awayMode = awayMode
         agentActivitySubscription = monitor.$snapshot
             .map(\.hasWorkingAgent)
             .removeDuplicates()
             .sink { [weak keepAwake] working in
                 keepAwake?.agentActivityDidChange(hasWorkingAgent: working)
             }
-        statusController = StatusItemController(monitor: monitor, keepAwake: keepAwake)
+        statusController = StatusItemController(
+            monitor: monitor, keepAwake: keepAwake, awayMode: awayMode
+        )
         let brightness = ClosedLidBrightnessController()
         closedLidBrightness = brightness
         brightness.bind(to: keepAwake)
-        brightness.start()
+        brightness.start(lidMonitor: lidStateMonitor)
+        awayMode.start(lidMonitor: lidStateMonitor)
+        if !lidStateMonitor.start() {
+            brightness.lidMonitoringDidFail()
+            awayMode.lidMonitoringDidFail()
+        }
 
         if Bundle.main.bundleIdentifier != nil {
             UNUserNotificationCenter.current().delegate = self
@@ -73,7 +86,9 @@ final class DremAppDelegate: NSObject, NSApplicationDelegate, UNUserNotification
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        awayMode?.shutdown()
         closedLidBrightness?.shutdown()
+        lidStateMonitor?.shutdown()
         KeepAwakeManager.shared.deactivate(reason: .quit)
     }
 

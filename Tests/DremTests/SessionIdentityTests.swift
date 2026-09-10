@@ -3,6 +3,23 @@ import Foundation
 import Testing
 
 struct SessionIdentityTests {
+    @Test
+    func turnContextReopensWorkAfterACompletedTurn() {
+        let completed = """
+        {"timestamp":"2026-09-09T15:47:46Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer"}}
+        """
+        let trailingOutput = completed + "\n" + """
+        {"timestamp":"2026-09-09T15:47:47Z","type":"response_item","payload":{"type":"custom_tool_call_output"}}
+        """
+        #expect(ActivityLogScanner.classifyCodexLog(trailingOutput) == .idle)
+
+        let continuedAfterCompaction = completed + "\n" + """
+        {"timestamp":"2026-09-09T15:47:47Z","type":"turn_context","payload":{}}
+        {"timestamp":"2026-09-09T15:47:48Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary"}}
+        """
+        #expect(ActivityLogScanner.classifyCodexLog(continuedAfterCompaction) == .working)
+    }
+
     @Test(arguments: [false, true])
     func boundSessionsAreNotHiddenByNewerLogsInTheSameFolder(olderIsWorking: Bool) async throws {
         let home = FileManager.default.temporaryDirectory

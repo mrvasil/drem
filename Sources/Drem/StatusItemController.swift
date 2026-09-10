@@ -11,6 +11,7 @@ import SwiftUI
 final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     private let monitor: AgentMonitor
     private let keepAwake: KeepAwakeManager
+    private let awayMode: AwayModeController
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
     private let presentation: AgentMenuPresentation
@@ -21,9 +22,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
     private var defaultsObserver: NSObjectProtocol?
     private var countdownTimer: Timer?
 
-    init(monitor: AgentMonitor, keepAwake: KeepAwakeManager) {
+    init(monitor: AgentMonitor, keepAwake: KeepAwakeManager, awayMode: AwayModeController) {
         self.monitor = monitor
         self.keepAwake = keepAwake
+        self.awayMode = awayMode
         presentation = AgentMenuPresentation(monitor: monitor)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
@@ -109,7 +111,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
         guard popover.contentViewController == nil else { return }
         let host = NSHostingController(
             rootView: StatusPanel(
-                presentation: presentation, keepAwake: keepAwake,
+                presentation: presentation, keepAwake: keepAwake, awayMode: awayMode,
                 openSettings: { [weak self] in self?.showSettings() },
                 refresh: { [weak self] in self?.refreshAgents() }
             )
@@ -129,7 +131,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
         wantsPopover = false
         popover.performClose(nil)
         if settingsWindow == nil {
-            let host = NSHostingController(rootView: KeepAwakeSettings(awake: keepAwake))
+            let host = NSHostingController(
+                rootView: KeepAwakeSettings(awake: keepAwake, awayMode: awayMode)
+            )
             let window = NSWindow(contentViewController: host)
             window.title = "Настройки drem"
             window.styleMask = [.titled, .closable, .miniaturizable]
@@ -182,6 +186,12 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
             .sink { [weak self] _ in self?.refresh() }
             .store(in: &cancellables)
 
+        awayMode.$state
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refresh() }
+            .store(in: &cancellables)
+
         defaultsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: nil,
@@ -217,6 +227,15 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
         awakeItem.target = self
         awakeItem.state = keepAwake.isActive ? .on : .off
         menu.addItem(awakeItem)
+
+        let awayItem = NSMenuItem(
+            title: "Вне дома",
+            action: #selector(toggleAwayMode),
+            keyEquivalent: ""
+        )
+        awayItem.target = self
+        awayItem.state = keepAwake.awayModeEnabled ? .on : .off
+        menu.addItem(awayItem)
 
         let durations = NSMenu(title: "Длительность")
         for (title, minutes) in [
@@ -274,6 +293,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
 
     @objc private func toggleKeepAwake() {
         keepAwake.toggle()
+    }
+
+    @objc private func toggleAwayMode() {
+        keepAwake.awayModeEnabled.toggle()
     }
 
     @objc private func activateForDuration(_ sender: NSMenuItem) {

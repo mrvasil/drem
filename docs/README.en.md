@@ -29,6 +29,8 @@ The installer replaces old hooks while preserving unrelated handlers.
 - Distinguishes working, waiting and offline agents.
 - Prevents sleep while at least one agent is working, including with the lid
   closed after a one-time administrator setup.
+- Adds an independent Away mode that opens the real macOS login screen on lid
+  close while active agents continue behind it.
 - Dims only the built-in display when the lid closes during an active agent
   session, then restores its previous brightness on opening.
 - Supports manual sessions, timers, battery cutoffs and a global shortcut.
@@ -78,6 +80,11 @@ administrator password on first setup.
 The agent mode takes priority over manual timers and power/display automation.
 Finishing the last task removes the app's blockers while leaving the mode ready
 for the next task. Battery protection remains in effect.
+
+Enable **«Вне дома»** before leaving. It does not own a sleep assertion: with no
+active task the locked Mac follows normal sleep policy. With an active task the
+system stays awake, while the locked display is allowed to turn off. A failed
+lock request is reported instead of being presented as protected.
 
 > [!CAUTION]
 > Keep an awake, closed laptop on a hard, ventilated surface, never in a bag.

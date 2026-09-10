@@ -14,6 +14,7 @@ enum KeepAwakeDefaultsKey {
     static let externalDisplay = "keepAwakeExternalDisplay"
     static let connectedToPower = "keepAwakeConnectedToPower"
     static let whileAgentsWork = "keepAwakeWhileAgentsWork"
+    static let awayMode = "keepAwakeAwayMode"
     static let pauseWhenLocked = "keepAwakePauseWhenLocked"
     static let mouseJiggleEnabled = "keepAwakeMouseJiggleEnabled"
     static let mouseJiggleInterval = "keepAwakeMouseJiggleIntervalMinutes"
@@ -90,6 +91,7 @@ enum KeepAwakePreferences {
             KeepAwakeDefaultsKey.externalDisplay: false,
             KeepAwakeDefaultsKey.connectedToPower: false,
             KeepAwakeDefaultsKey.whileAgentsWork: false,
+            KeepAwakeDefaultsKey.awayMode: false,
             KeepAwakeDefaultsKey.pauseWhenLocked: false,
             KeepAwakeDefaultsKey.mouseJiggleEnabled: false,
             KeepAwakeDefaultsKey.mouseJiggleInterval: 5,

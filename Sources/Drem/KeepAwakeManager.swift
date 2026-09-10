@@ -51,6 +51,14 @@ final class KeepAwakeManager: ObservableObject {
         }
     }
 
+    @Published var awayModeEnabled: Bool {
+        didSet {
+            guard awayModeEnabled != oldValue else { return }
+            self.defaults.set(awayModeEnabled, forKey: KeepAwakeDefaultsKey.awayMode)
+            syncWithPreferences()
+        }
+    }
+
     @Published var clamshellPreferred: Bool {
         didSet {
             guard clamshellPreferred != oldValue else { return }
@@ -137,6 +145,7 @@ final class KeepAwakeManager: ObservableObject {
             forKey: KeepAwakeDefaultsKey.clamshellPreferred
         )
         whileAgentsWork = self.defaults.bool(forKey: KeepAwakeDefaultsKey.whileAgentsWork)
+        awayModeEnabled = self.defaults.bool(forKey: KeepAwakeDefaultsKey.awayMode)
 
         if let clamshellConfigured {
             passwordlessClamshell = clamshellConfigured
@@ -422,8 +431,10 @@ final class KeepAwakeManager: ObservableObject {
     private func applyAssertions() {
         do {
             try assertions.activate(
-                allowDisplaySleep: self.defaults.bool(
-                    forKey: KeepAwakeDefaultsKey.allowDisplaySleep
+                allowDisplaySleep: KeepAwakeAgentPolicy.shouldAllowDisplaySleep(
+                    userPreference: self.defaults.bool(forKey: KeepAwakeDefaultsKey.allowDisplaySleep),
+                    awayModeEnabled: awayModeEnabled,
+                    screenLocked: screenLocked
                 )
             )
         } catch {
@@ -460,6 +471,7 @@ final class KeepAwakeManager: ObservableObject {
     private func syncScreenLockMonitoring() {
         guard monitorSystem else { return }
         let enabled = self.defaults.bool(forKey: KeepAwakeDefaultsKey.pauseWhenLocked)
+            || awayModeEnabled
         let center = DistributedNotificationCenter.default()
 
         if enabled {
@@ -497,6 +509,9 @@ final class KeepAwakeManager: ObservableObject {
         guard screenLocked != locked else { return }
         screenLocked = locked
         syncSessionWithScreenLock()
+        // Away mode keeps the system assertion but lets the login screen turn
+        // off. Unlocking restores the user's normal display-sleep preference.
+        if isActive, !isPausedForScreenLock { applyAssertions() }
         evaluateAutomation()
     }
 

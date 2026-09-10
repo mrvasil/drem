@@ -39,6 +39,7 @@ struct AgentMenuState: Equatable {
 struct StatusPanel: View {
     @ObservedObject var presentation: AgentMenuPresentation
     let keepAwake: KeepAwakeManager
+    @ObservedObject var awayMode: AwayModeController
     let openSettings: () -> Void
     let refresh: () -> Void
 
@@ -54,7 +55,7 @@ struct StatusPanel: View {
                 AgentMenuRow(row: row, isLoading: presentation.state.isLoading)
             }
             Divider().padding(.vertical, 10)
-            KeepAwakeControls(awake: keepAwake)
+            KeepAwakeControls(awake: keepAwake, awayMode: awayMode)
             if let error = presentation.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(.red)

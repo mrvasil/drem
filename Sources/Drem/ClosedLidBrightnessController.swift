@@ -20,7 +20,8 @@ final class ClosedLidBrightnessController {
     private var original: BuiltinBrightnessSnapshot?
     private var agentWakeActive = false
     private var stopped = false
-    private var observer: LidStateObserver?
+    private weak var lidMonitor: LidStateMonitor?
+    private var lidObservation: UUID?
     private var screenObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
     private var retry: DispatchWorkItem?
@@ -41,7 +42,6 @@ final class ClosedLidBrightnessController {
 
     deinit {
         retry?.cancel()
-        observer?.stop()
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
     }
@@ -56,27 +56,32 @@ final class ClosedLidBrightnessController {
         .sink { [weak self] active in self?.update(agentWakeActive: active) }
     }
 
-    func start() {
-        guard monitorSystem, observer == nil, !stopped else { return }
-        let observer = LidStateObserver { [weak self] closed in
-            DispatchQueue.main.async { self?.lidStateDidChange(closed) }
+    func start(lidMonitor: LidStateMonitor) {
+        guard monitorSystem, lidObservation == nil, !stopped else { return }
+        self.lidMonitor = lidMonitor
+        lidObservation = lidMonitor.observe { [weak self] closed in
+            self?.lidStateDidChange(closed)
         }
-        guard observer.start() else {
-            lastError = "Не удалось включить отслеживание крышки для яркости"
-            return
-        }
-        self.observer = observer
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            DispatchQueue.main.async { self?.systemDidChange() }
+            DispatchQueue.main.async {
+                self?.lidMonitor?.refresh()
+                self?.systemDidChange()
+            }
         }
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            DispatchQueue.main.async { self?.systemDidChange() }
+            DispatchQueue.main.async {
+                self?.lidMonitor?.refresh()
+                self?.systemDidChange()
+            }
         }
-        lidStateDidChange(observer.currentState)
+    }
+
+    func lidMonitoringDidFail() {
+        lastError = "Не удалось включить отслеживание крышки для яркости"
     }
 
     func update(agentWakeActive: Bool) {
@@ -93,7 +98,7 @@ final class ClosedLidBrightnessController {
 
     func systemDidChange() {
         guard !stopped else { return }
-        if let observer { lidClosed = observer.currentState }
+        if let lidMonitor { lidClosed = lidMonitor.currentState }
         reconcile(resetRetries: true)
     }
 
@@ -103,8 +108,9 @@ final class ClosedLidBrightnessController {
         activitySubscription = nil
         retry?.cancel()
         retry = nil
-        observer?.stop()
-        observer = nil
+        if let lidObservation { lidMonitor?.removeObserver(lidObservation) }
+        lidObservation = nil
+        lidMonitor = nil
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }

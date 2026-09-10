@@ -15,7 +15,9 @@ Known PID exits ────────┤                           ├─→ 
 15-second watchdog ─────┘                           └─→ KeepAwakeManager
                                                          ├─→ sleep assertions
                                                          ├─→ closed-lid override
-                                                         ├─→ display brightness
+                                                         ├─→ LidStateMonitor
+                                                         │    ├─→ display brightness
+                                                         │    └─→ AwayModeController → macOS lock screen
                                                          └─→ icon + preferences
 ```
 
@@ -26,7 +28,10 @@ Known PID exits ────────┤                           ├─→ 
 | `Sources/DremCore` | Модели, поиск процессов, hooks, журналы, объединение событий, sleep policy. |
 | `Sources/Drem/AgentMonitor.swift` | Системные наблюдатели, watchdog и доставка снимков. |
 | `Sources/Drem/KeepAwakeManager.swift` | Ручные и автоматические сеансы, приоритеты, освобождение ресурсов. |
+| `Sources/Drem/LidStateMonitor.swift` | Единственный событийный источник состояния крышки для потребителей UI. |
 | `Sources/Drem/ClosedLidBrightnessController.swift` | Сохранение и восстановление яркости встроенной панели. |
+| `Sources/Drem/AwayModeController.swift` | Edge-triggered блокировка, подтверждение результата и fallback. |
+| `Sources/Drem/SystemScreenLocker.swift` | Узкий динамический мост к экрану входа macOS. |
 | `Sources/Drem/StatusItemController.swift` | NSPopover, меню, кеш иконки и настройки. |
 | `Sources/DremBrand` | Векторные значки; звезда строки меню отделена от artwork приложения. |
 | `Sources/DremHook` | Минимальная обработка lifecycle-события из stdin. |
@@ -57,6 +62,10 @@ Claude Code закрывает журналы между записями. Ко�
 Hook и transcript сравниваются по времени семантического события активности,
 а не произвольной записи в файл. `token_count` не превращает ожидание в работу;
 завершающие события должны победить старый `SessionStart`.
+Новый `turn_context` после compaction разрешает следующему реальному
+reasoning/tool/commentary-событию открыть продолжение задачи даже без нового
+`UserPromptSubmit`. Сама граница не считается работой, а поздний tool output
+без неё не может оживить уже завершённую задачу.
 Работа, записанная до запуска нынешнего процесса, не переносится на него
 при возобновлении старого чата.
 
@@ -93,6 +102,18 @@ sudoers-правилом. Эти механизмы отличаются: сме
 и UUID панели, затем выполняется затемнение. Ошибка восстановления сохраняет
 данные для последующей попытки. Прямые системные эффекты заменяются в обычных
 тестах; hardware-проверка включается только явной переменной окружения.
+
+Режим «Вне дома» также не владеет сном. Один `LidStateMonitor` раздаёт событие
+закрытия контроллеру яркости и `AwayModeController`. Блокировка вызывается
+только на переходе в закрытое состояние, затем подтверждается через текущую
+CGSession. Сначала динамически вызывается `SACLockScreenImmediate`; при
+отсутствии или неподтверждённом результате используется системное `⌃⌘Q` через
+Accessibility. Ни один путь не рисует собственный псевдоэкран блокировки.
+
+`KeepAwakeManager` продолжает владеть IOKit assertions и `SleepDisabled`.
+Заблокированный Away-сеанс разрешает сон дисплея, но работающий агент сохраняет
+системную assertion. После последнего агента прежний путь освобождения снимает
+все ресурсы независимо от состояния экрана и переключателя Away.
 
 ## Совместимость имён
 

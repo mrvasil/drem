@@ -7,6 +7,7 @@ import SwiftUI
 
 struct KeepAwakeControls: View {
     @ObservedObject var awake: KeepAwakeManager
+    @ObservedObject var awayMode: AwayModeController
     @AppStorage(KeepAwakeDefaultsKey.defaultDuration) private var duration = 0
 
     var body: some View {
@@ -37,6 +38,15 @@ struct KeepAwakeControls: View {
             .accessibilityLabel("Пока работают агенты")
             .accessibilityHint("Только во время задач, включая закрытую крышку. После последней задачи drem снимает все свои блокировки сна.")
             .disabled(awake.clamshellSetupInProgress)
+            Toggle(isOn: $awake.awayModeEnabled) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Вне дома")
+                    Text(awayStatus).font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .accessibilityLabel("Вне дома")
+            .accessibilityHint("Блокировать Mac при закрытии крышки. Работающие агенты продолжат задачи.")
             if awake.isActive, awake.endDate != nil {
                 HStack {
                     Text("Продлить").foregroundStyle(.secondary)
@@ -47,7 +57,7 @@ struct KeepAwakeControls: View {
                     }
                 }.font(.system(size: 11))
             }
-            if let error = awake.lastError ?? awake.brightnessError {
+            if let error = awayMode.lastError ?? awake.lastError ?? awake.brightnessError {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
@@ -82,10 +92,30 @@ struct KeepAwakeControls: View {
         if awake.whileAgentsWork { return "Нет активных задач — сон разрешён" }
         return "Включая закрытую крышку"
     }
+    private var awayStatus: String {
+        switch awayMode.state {
+        case .disabled:
+            return "Автоблокировка при закрытии выключена"
+        case .armed:
+            if awake.whileAgentsWork, awake.hasWorkingAgent, !awake.clamshellActive {
+                return "Подготавливается режим закрытой крышки…"
+            }
+            return "Закрытие крышки заблокирует Mac"
+        case .locking:
+            return "Блокировка Mac…"
+        case .locked:
+            return awake.agentRequiresWake
+                ? "Mac заблокирован · агенты продолжают работу"
+                : "Mac заблокирован · обычный сон разрешён"
+        case .failed:
+            return "Не удалось подтвердить блокировку"
+        }
+    }
 }
 
 struct KeepAwakeSettings: View {
     @ObservedObject var awake: KeepAwakeManager
+    @ObservedObject var awayMode: AwayModeController
     @ObservedObject private var hotkey = KeepAwakeHotkeyManager.shared
     @AppStorage(KeepAwakeDefaultsKey.defaultDuration) private var duration = 0
     @AppStorage(KeepAwakeDefaultsKey.batteryLimit) private var battery = 10
@@ -135,6 +165,7 @@ struct KeepAwakeSettings: View {
             Section {
                 Toggle("Пока работают агенты", isOn: $awake.whileAgentsWork)
                     .disabled(awake.clamshellSetupInProgress)
+                Toggle("Вне дома — блокировать при закрытии", isOn: $awake.awayModeEnabled)
                 Toggle("При подключённом питании", isOn: $power)
                     .onChange(of: power) { _ in awake.automationPreferencesDidChange() }
                     .disabled(awake.whileAgentsWork)
@@ -143,7 +174,7 @@ struct KeepAwakeSettings: View {
                     .disabled(awake.whileAgentsWork)
                 Toggle("Пауза при блокировке Mac", isOn: $pauseLocked)
             } header: { Text("Автоматическое включение") } footer: {
-                Text("Режим агентов имеет приоритет: после последней задачи снимаются все блокировки сна. При закрытии крышки встроенный экран затемняется, при открытии прежняя яркость возвращается. Остальные режимы доступны, когда режим агентов выключен.")
+                Text("«Вне дома» включает настоящую системную блокировку при закрытии крышки, но сам не удерживает Mac от сна. Пока агенты работают, они продолжают задачи на заблокированном Mac; после последней задачи drem снимает все свои блокировки сна.")
             }
             Section {
                 Toggle("Не спать с закрытой крышкой", isOn: $awake.clamshellPreferred)
@@ -153,7 +184,9 @@ struct KeepAwakeSettings: View {
                         .disabled(awake.clamshellSetupInProgress)
                 }
             } header: { Text("Крышка в остальных режимах") } footer: { Text(clamshellCaption) }
-            if let error = awake.lastError ?? awake.brightnessError { Text(error).foregroundStyle(.red) }
+            if let error = awayMode.lastError ?? awake.lastError ?? awake.brightnessError {
+                Text(error).foregroundStyle(.red)
+            }
         }.formStyle(.grouped)
     }
     private var controlSettings: some View {

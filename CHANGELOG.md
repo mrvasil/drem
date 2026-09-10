@@ -3,6 +3,19 @@
 User-visible changes are recorded here. Version numbers correspond to the
 application bundle.
 
+## 1.6.0 — 2026-09-09
+
+### Added
+
+- Add an independent Away mode that requests the real macOS lock screen when the lid closes.
+- Keep active agents running behind the lock screen, let the display sleep, and preserve the existing last-agent sleep release.
+- Share one event-driven lid observer between screen security and built-in display brightness.
+- Verify every lock request, fall back to the system Lock Screen shortcut, and report failure instead of showing a false protected state.
+
+### Fixed
+
+- Keep Codex marked as working when an automatic continuation after compaction starts real reasoning or tool work without another user-prompt hook.
+
 ## 1.5.2 — 2026-09-07
 
 ### Fixed
