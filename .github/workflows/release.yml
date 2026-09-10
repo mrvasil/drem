@@ -20,7 +20,7 @@ jobs:
           persist-credentials: false
       - name: Validate tag and bundle version
         id: version
-        shell: zsh
+        shell: zsh {0}
         run: |
           version="${GITHUB_REF_NAME#v}"
           bundle_version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Resources/Info.plist)"
@@ -51,7 +51,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
-        shell: zsh
+        shell: zsh {0}
         run: |
           notes="$RUNNER_TEMP/release-notes.md"
           cat > "$notes" <<EOF
