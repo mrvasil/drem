@@ -38,12 +38,14 @@ public struct ActivityLogScanner: Sendable {
         let processes = ClaudeSessionRegistry(homeDirectory: homeDirectory).applying(to: processes)
         let hookSessions = HookStateStore(homeDirectory: homeDirectory).readValid(processes: processes)
         let transcriptSessions = scanTranscriptRecords(processes: processes)
+        let activeCodexGoals = (try? CodexGoalRegistry(homeDirectory: homeDirectory).readActiveGoals()) ?? [:]
         let statuses = AgentKind.allCases.map { kind in
             makeStatus(
                 kind: kind,
                 processes: processes,
                 hookSessions: hookSessions,
-                transcriptSessions: transcriptSessions
+                transcriptSessions: transcriptSessions,
+                activeCodexGoals: activeCodexGoals
             )
         }
         return AgentSnapshot(statuses: statuses)
@@ -64,14 +66,15 @@ public struct ActivityLogScanner: Sendable {
         kind: AgentKind,
         processes: [DetectedAgentProcess],
         hookSessions: [AgentSessionActivity],
-        transcriptSessions: [TranscriptActivityRecord]
+        transcriptSessions: [TranscriptActivityRecord],
+        activeCodexGoals: [String: Date]
     ) -> AgentStatus {
         let kindProcesses = processes.filter { $0.kind == kind }
         guard !kindProcesses.isEmpty else {
             return AgentStatus(kind: kind, state: .offline, runningProcessCount: 0, sessions: [])
         }
 
-        let sessions = AgentActivityEvidence.merge(
+        let merged = AgentActivityEvidence.merge(
             hooks: hookSessions.filter { $0.kind == kind },
             transcripts: transcriptSessions.map(\.session).filter { $0.kind == kind }
         ).map { session in
@@ -79,6 +82,10 @@ public struct ActivityLogScanner: Sendable {
                 session, startedAt: kindProcesses.first { $0.id == session.processID }?.startedAt
             )
         }
+        let sessions = AgentActivityEvidence.applyingActiveCodexGoals(
+            merged,
+            activeGoals: activeCodexGoals
+        )
 
         return AgentStatus(
             kind: kind,

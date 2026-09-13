@@ -3,11 +3,21 @@
 
 import AppKit
 import Combine
+import Darwin
 import UserNotifications
 
 @main
 enum DremApplication {
     static func main() {
+        if CommandLine.arguments.dropFirst().first == ClamshellSleepGuardWorker.argument {
+            // A broad `killall Drem` must kill the owner first, not the guard
+            // before it has restored the persistent pmset switch.
+            signal(SIGTERM, SIG_IGN)
+            signal(SIGINT, SIG_IGN)
+            signal(SIGHUP, SIG_IGN)
+            exit(ClamshellSleepGuardWorker.run())
+        }
+
         let application = NSApplication.shared
         let delegate = DremAppDelegate()
         application.delegate = delegate

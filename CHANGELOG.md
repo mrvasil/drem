@@ -3,6 +3,16 @@
 User-visible changes are recorded here. Version numbers correspond to the
 application bundle.
 
+## Unreleased
+
+### Fixed
+
+- Keep Codex `/goal` sessions working across automatic turn completions by
+  observing the local goal registry; stop on paused, blocked, limited or
+  completed status without adding a polling loop.
+- Restore the persistent closed-lid sleep switch through an event-driven child
+  guard when drem is force-quit or crashes, without background polling.
+
 ## 1.6.0 — 2026-09-10
 
 ### Added

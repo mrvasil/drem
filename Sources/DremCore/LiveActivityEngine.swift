@@ -4,6 +4,7 @@ public struct LiveActivityState: Sendable {
     public let snapshot: AgentSnapshot
     public let processIDs: [Int32]
     public let transcriptPaths: [String]
+    public let goalDatabasePaths: [String]
     public let needsProcessReconciliation: Bool
 }
 
@@ -22,15 +23,18 @@ public actor LiveActivityEngine {
     private let homeDirectory: URL
     private let hookStore: HookStateStore
     private let incrementalScanner: IncrementalTranscriptScanner
+    private let goalRegistry: CodexGoalRegistry
     private var processes: [DetectedAgentProcess] = []
     private var transcriptSessions: [SessionKey: TrackedSession] = [:]
     private var knownHookSessions = Set<SessionKey>()
     private var hookProcessIDs: [SessionKey: Int32] = [:]
+    private var activeCodexGoals: [String: Date] = [:]
 
     public init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.homeDirectory = homeDirectory
         hookStore = HookStateStore(homeDirectory: homeDirectory)
         incrementalScanner = IncrementalTranscriptScanner()
+        goalRegistry = CodexGoalRegistry(homeDirectory: homeDirectory)
     }
 
     public func bootstrap() throws -> LiveActivityState {
@@ -45,6 +49,7 @@ public actor LiveActivityEngine {
     public func reconcile(processes: [DetectedAgentProcess]) -> LiveActivityState {
         let processes = ClaudeSessionRegistry(homeDirectory: homeDirectory).applying(to: processes)
         self.processes = processes
+        refreshActiveCodexGoals()
         let transcriptRecords = ActivityLogScanner(homeDirectory: homeDirectory)
             .scanTranscriptRecords(processes: processes)
 
@@ -73,6 +78,10 @@ public actor LiveActivityEngine {
     public func handleFileEvents(_ paths: [String]) -> LiveActivityState {
         var needsReconciliation = ClaudeSessionRegistry(homeDirectory: homeDirectory)
             .needsDiscovery(for: paths, processes: processes)
+
+        if paths.contains(where: goalRegistry.containsEventPath) {
+            refreshActiveCodexGoals()
+        }
 
         for path in Set(paths) {
             guard let kind = transcriptKind(for: path) else { continue }
@@ -242,11 +251,15 @@ public actor LiveActivityEngine {
                 return session
             }
 
-            let sessions = AgentActivityEvidence.merge(hooks: hooks, transcripts: transcripts).map { session in
+            let merged = AgentActivityEvidence.merge(hooks: hooks, transcripts: transcripts).map { session in
                 AgentActivityEvidence.forProcessLifetime(
                     session, startedAt: kindProcesses.first { $0.id == session.processID }?.startedAt
                 )
             }
+            let sessions = AgentActivityEvidence.applyingActiveCodexGoals(
+                merged,
+                activeGoals: activeCodexGoals
+            )
             let state: AgentActivity
             if kindProcesses.isEmpty && sessions.isEmpty {
                 state = .offline
@@ -271,8 +284,15 @@ public actor LiveActivityEngine {
                 transcriptSessions.values.map(\.transcriptPath)
                     + processes.flatMap(\.openTranscriptPaths)
             )).sorted(),
+            goalDatabasePaths: goalRegistry.observedPaths,
             needsProcessReconciliation: needsProcessReconciliation
         )
+    }
+
+    private func refreshActiveCodexGoals() {
+        if let goals = try? goalRegistry.readActiveGoals() {
+            activeCodexGoals = goals
+        }
     }
 
     private func hasMatchingProcess(

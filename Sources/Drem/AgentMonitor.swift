@@ -79,7 +79,7 @@ final class AgentMonitor: ObservableObject {
         )
 
         let candidates = hookStore.observedDirectoryURLs.map(\.path) + [
-            home.appendingPathComponent(".codex/sessions", isDirectory: true).path,
+            home.appendingPathComponent(".codex", isDirectory: true).path,
             home.appendingPathComponent(".claude/projects", isDirectory: true).path,
             home.appendingPathComponent(".claude/sessions", isDirectory: true).path
         ]
@@ -122,7 +122,7 @@ final class AgentMonitor: ObservableObject {
 
     private func apply(_ state: LiveActivityState) {
         snapshot = state.snapshot
-        watcher?.setTrackedFiles(state.transcriptPaths)
+        watcher?.setTrackedFiles(state.transcriptPaths + state.goalDatabasePaths)
         syncProcessSources(with: state.processIDs)
     }
 

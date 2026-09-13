@@ -30,6 +30,7 @@ public enum AgentActivity: String, Codable, Sendable {
 public enum ActivitySource: String, Codable, Sendable {
     case hook
     case transcript
+    case goal
     case process
 }
 

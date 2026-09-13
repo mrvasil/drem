@@ -130,8 +130,8 @@ final class KeepAwakeManager: ObservableObject {
     init(
         defaults: UserDefaults = .standard,
         monitorSystem: Bool = true,
-        clamshellWrite: @escaping (Bool, @escaping (Bool) -> Void) -> Void = KeepAwakeSudoers.pmsetDisableSleep,
-        clamshellRestoreSync: @escaping () -> Bool = { KeepAwakeSudoers.pmsetDisableSleep(false) },
+        clamshellWrite: @escaping (Bool, @escaping (Bool) -> Void) -> Void = KeepAwakeClamshellGuard.setEnabled,
+        clamshellRestoreSync: @escaping () -> Bool = KeepAwakeClamshellGuard.restoreSync,
         clamshellConfigured: Bool? = nil,
         batterySnapshot: @escaping () -> KeepAwakeBatteryInfo? = KeepAwakeSystemInfo.batterySnapshot
     ) {

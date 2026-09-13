@@ -50,4 +50,20 @@ struct AgentMenuTests {
         #expect(AgentMenuState(snapshot: .empty).isLoading)
         #expect(!offline.isLoading)
     }
+
+    @Test func popoverOpeningWaitsForSettledApplicationActivation() {
+        var gate = PopoverPresentationGate()
+
+        let initialSchedule = gate.requestPresentation()
+        let beforeActivation = gate.consumePresentation(isApplicationActive: false)
+        let activationSchedule = gate.applicationDidBecomeActive()
+        let afterActivation = gate.consumePresentation(isApplicationActive: true)
+        let duplicatePresentation = gate.consumePresentation(isApplicationActive: true)
+
+        #expect(initialSchedule)
+        #expect(!beforeActivation)
+        #expect(activationSchedule)
+        #expect(afterActivation)
+        #expect(!duplicatePresentation)
+    }
 }

@@ -95,9 +95,10 @@ lock request is reported instead of being presented as protected.
 
 > [!CAUTION]
 > Keep an awake, closed laptop on a hard, ventilated surface, never in a bag.
-> A force-quit can leave the system-wide lid override enabled until the app
-> restarts or you restore it manually. Brightness control uses dynamically
-> loaded DisplayServices interfaces and is hardware/OS-dependent.
+> A separate guard restores the system-wide lid override after a normal quit,
+> force-quit, or app crash. If both processes are killed at once, the persisted
+> recovery flag is checked on the next launch. Brightness control uses
+> dynamically loaded DisplayServices interfaces and is hardware/OS-dependent.
 
 ## How it stays quiet
 
@@ -105,6 +106,12 @@ Lifecycle hooks and filesystem events drive updates. Known logs are read
 incrementally. A 15-second watchdog checks known PIDs and appended transcript
 bytes; a full reconciliation runs at startup, on recovery/manual refresh and
 every five minutes. No full-system one-second polling loop.
+
+Codex `/goal` state is read locally from `~/.codex/goals_1.sqlite`. An active
+goal keeps its bound live session working across automatic turn boundaries;
+paused, blocked, limited and completed goals do not. SQLite/WAL filesystem
+events drive updates without another polling loop, and drem never selects the
+goal objective text.
 
 Session identity takes precedence over process presence. Detection depends on
 agent event formats; this is a local observer, not an official provider status API.

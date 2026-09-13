@@ -121,6 +121,111 @@ enum KeepAwakeShell {
     }
 }
 
+/// Runs in a tiny child process while closed-lid sleep is disabled. The child
+/// blocks on stdin without polling; if the owning drem process exits or is
+/// force-quit, the pipe reaches EOF and the child restores normal sleep.
+enum ClamshellSleepGuardWorker {
+    static let argument = "--clamshell-sleep-guard"
+
+    static func run(
+        input: FileHandle = .standardInput,
+        readyOutput: FileHandle? = .standardOutput,
+        setSleepDisabled: (Bool) -> Bool = KeepAwakeSudoers.pmsetDisableSleep
+    ) -> Int32 {
+        guard setSleepDisabled(true) else {
+            readyOutput?.write(Data([0]))
+            return 1
+        }
+
+        readyOutput?.write(Data([1]))
+        _ = input.readDataToEndOfFile()
+        return setSleepDisabled(false) ? 0 : 2
+    }
+}
+
+/// Owns the guard process from the app side. All transitions are serialized so
+/// a late enable cannot outlive a newer disable request.
+enum KeepAwakeClamshellGuard {
+    private static let lifecycleQueue = DispatchQueue(
+        label: "local.mrvasil.drem.clamshell-guard"
+    )
+    private static var process: Process?
+    private static var input: Pipe?
+
+    static func setEnabled(_ enabled: Bool, completion: @escaping (Bool) -> Void) {
+        lifecycleQueue.async {
+            completion(enabled ? startOnQueue() : stopOnQueue())
+        }
+    }
+
+    static func restoreSync() -> Bool {
+        lifecycleQueue.sync { stopOnQueue() }
+    }
+
+    private static func startOnQueue() -> Bool {
+        if let process, process.isRunning { return true }
+        clearProcessOnQueue()
+
+        guard let executable = Bundle.main.executableURL else { return false }
+        let process = Process()
+        let input = Pipe()
+        let ready = Pipe()
+        process.executableURL = executable
+        process.arguments = [ClamshellSleepGuardWorker.argument]
+        process.standardInput = input
+        process.standardOutput = ready
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            try? input.fileHandleForReading.close()
+            try? ready.fileHandleForWriting.close()
+        } catch {
+            try? input.fileHandleForReading.close()
+            try? input.fileHandleForWriting.close()
+            try? ready.fileHandleForReading.close()
+            try? ready.fileHandleForWriting.close()
+            return false
+        }
+
+        let signal = try? ready.fileHandleForReading.read(upToCount: 1)
+        try? ready.fileHandleForReading.close()
+        guard signal == Data([1]), process.isRunning else {
+            try? input.fileHandleForWriting.close()
+            process.waitUntilExit()
+            // A failed or interrupted handshake must never leave the durable
+            // pmset switch behind.
+            _ = KeepAwakeSudoers.pmsetDisableSleep(false)
+            return false
+        }
+
+        self.process = process
+        self.input = input
+        return true
+    }
+
+    private static func stopOnQueue() -> Bool {
+        guard let process else {
+            clearProcessOnQueue()
+            // Also repairs state left by an older drem build which had no guard.
+            return KeepAwakeSudoers.pmsetDisableSleep(false)
+        }
+
+        try? input?.fileHandleForWriting.close()
+        process.waitUntilExit()
+        let restored = process.terminationStatus == 0
+        clearProcessOnQueue()
+        return restored || KeepAwakeSudoers.pmsetDisableSleep(false)
+    }
+
+    private static func clearProcessOnQueue() {
+        try? input?.fileHandleForReading.close()
+        try? input?.fileHandleForWriting.close()
+        input = nil
+        process = nil
+    }
+}
+
 enum KeepAwakeAdminShell {
     private static let promptLock = NSLock()
     private static var prompting = false

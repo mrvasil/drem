@@ -31,4 +31,24 @@ public enum AgentActivityEvidence {
         }
         return bySession.values.sorted { $0.updatedAt > $1.updatedAt }
     }
+
+    public static func applyingActiveCodexGoals(
+        _ sessions: [AgentSessionActivity],
+        activeGoals: [String: Date]
+    ) -> [AgentSessionActivity] {
+        sessions.map { session in
+            guard session.kind == .codex, let goalUpdatedAt = activeGoals[session.id] else {
+                return session
+            }
+            return AgentSessionActivity(
+                id: session.id,
+                kind: session.kind,
+                state: .working,
+                updatedAt: max(session.updatedAt, goalUpdatedAt),
+                projectName: session.projectName,
+                processID: session.processID,
+                source: .goal
+            )
+        }.sorted { $0.updatedAt > $1.updatedAt }
+    }
 }

@@ -7,6 +7,40 @@ import DremBrand
 import Combine
 import SwiftUI
 
+struct PopoverPresentationGate {
+    private var isRequested = false
+    private var isScheduled = false
+
+    mutating func requestPresentation() -> Bool {
+        isRequested = true
+        return scheduleIfNeeded()
+    }
+
+    mutating func applicationDidBecomeActive() -> Bool {
+        guard isRequested else { return false }
+        return scheduleIfNeeded()
+    }
+
+    mutating func consumePresentation(isApplicationActive: Bool) -> Bool {
+        guard isScheduled else { return false }
+        isScheduled = false
+        guard isRequested, isApplicationActive else { return false }
+        isRequested = false
+        return true
+    }
+
+    mutating func cancel() {
+        isRequested = false
+        isScheduled = false
+    }
+
+    private mutating func scheduleIfNeeded() -> Bool {
+        guard !isScheduled else { return false }
+        isScheduled = true
+        return true
+    }
+}
+
 @MainActor
 final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     private let monitor: AgentMonitor
@@ -15,9 +49,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
     private let presentation: AgentMenuPresentation
+    private var popoverPresentationGate = PopoverPresentationGate()
     private var settingsWindow: NSWindow?
     private var lastImageKey: String?
-    private var wantsPopover = false
     private var cancellables = Set<AnyCancellable>()
     private var defaultsObserver: NSObjectProtocol?
     private var countdownTimer: Timer?
@@ -44,18 +78,22 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
     }
 
     func showPopover() {
-        wantsPopover = true
-        if NSApp.isActive {
-            presentPopover()
-        } else {
-            // App activation is asynchronous. Present after didBecomeActive,
-            // otherwise the focus change can immediately dismiss a transient popover.
-            NSApp.activate(ignoringOtherApps: true)
+        let shouldSchedule = popoverPresentationGate.requestPresentation()
+        NSApp.activate(ignoringOtherApps: true)
+        if shouldSchedule { schedulePopoverPresentation() }
+    }
+
+    private func schedulePopoverPresentation() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard self.popoverPresentationGate.consumePresentation(
+                isApplicationActive: NSApp.isActive
+            ) else { return }
+            self.presentPopover()
         }
     }
 
     private func presentPopover() {
-        wantsPopover = false
         guard let button = statusItem.button else { return }
         installPopoverContentIfNeeded()
         popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -128,7 +166,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
     }
 
     @objc private func showSettings() {
-        wantsPopover = false
+        popoverPresentationGate.cancel()
         popover.performClose(nil)
         if settingsWindow == nil {
             let host = NSHostingController(
@@ -159,8 +197,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
     private func bind() {
         NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
             .sink { [weak self] _ in
-                guard let self, self.wantsPopover else { return }
-                self.presentPopover()
+                guard let self else { return }
+                if self.popoverPresentationGate.applicationDidBecomeActive() {
+                    self.schedulePopoverPresentation()
+                }
             }
             .store(in: &cancellables)
 
@@ -209,6 +249,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
                 showContextMenu()
             }
         } else if popover.isShown {
+            popoverPresentationGate.cancel()
             popover.performClose(nil)
         } else {
             showPopover()
