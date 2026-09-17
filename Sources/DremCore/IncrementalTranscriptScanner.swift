@@ -19,6 +19,9 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
         let metadata: Metadata
         var state: AgentActivity
         var activityAt: Date
+        // Codex can flush turn_context before the first reasoning/tool event.
+        // Preserve that semantic boundary across separate vnode batches.
+        var acceptsWorkAfterBoundary: Bool
     }
 
     private let tailLimit: Int
@@ -58,10 +61,17 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
             let split = completeJSONLines(in: combined)
             cursor.remainder = split.remainder
 
-            if !split.text.isEmpty,
-               let evidence = classify(split.text, kind: kind, previousState: cursor.state) {
-                cursor.state = evidence.state
-                cursor.activityAt = evidence.timestamp ?? modifiedAt
+            if !split.text.isEmpty {
+                let evidence = classify(
+                    split.text,
+                    kind: kind,
+                    previousState: cursor.state,
+                    acceptsWorkAfterBoundary: &cursor.acceptsWorkAfterBoundary
+                )
+                if let evidence {
+                    cursor.state = evidence.state
+                    cursor.activityAt = evidence.timestamp ?? modifiedAt
+                }
             }
             cursors[path] = cursor
 
@@ -76,24 +86,34 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
         }
 
         guard let metadata = metadata(for: url, kind: kind),
-              let initial = readTail(url: url, size: size),
-              let evidence = classify(initial.text, kind: kind) else {
+              let initial = readTail(url: url, size: size) else {
             return nil
         }
+        var acceptsWorkAfterBoundary = false
+        let evidence = classify(
+            initial.text,
+            kind: kind,
+            previousState: nil,
+            acceptsWorkAfterBoundary: &acceptsWorkAfterBoundary
+        )
+        guard evidence != nil || acceptsWorkAfterBoundary else { return nil }
+        let state = evidence?.state ?? .idle
+        let activityAt = evidence?.timestamp ?? modifiedAt
 
         cursors[path] = Cursor(
             offset: size,
             remainder: initial.remainder,
             metadata: metadata,
-            state: evidence.state,
-            activityAt: evidence.timestamp ?? modifiedAt
+            state: state,
+            activityAt: activityAt,
+            acceptsWorkAfterBoundary: acceptsWorkAfterBoundary
         )
 
         return makeResult(
             metadata: metadata,
             kind: kind,
-            state: evidence.state,
-            updatedAt: evidence.timestamp ?? modifiedAt,
+            state: state,
+            updatedAt: activityAt,
             bytesRead: initial.bytesRead,
             wasIncremental: false
         )
@@ -132,12 +152,18 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
     private func classify(
         _ text: String,
         kind: AgentKind,
-        previousState: AgentActivity? = nil
+        previousState: AgentActivity?,
+        acceptsWorkAfterBoundary: inout Bool
     ) -> TranscriptActivityEvidence? {
         switch kind {
         case .codex:
-            return ActivityLogScanner.codexEvidence(text, previousState: previousState)
+            return ActivityLogScanner.codexEvidence(
+                text,
+                previousState: previousState,
+                acceptsWorkAfterBoundary: &acceptsWorkAfterBoundary
+            )
         case .claude:
+            acceptsWorkAfterBoundary = false
             return ActivityLogScanner.claudeEvidence(text)
         }
     }

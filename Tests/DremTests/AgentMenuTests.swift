@@ -51,19 +51,15 @@ struct AgentMenuTests {
         #expect(!offline.isLoading)
     }
 
-    @Test func popoverOpeningWaitsForSettledApplicationActivation() {
+    @Test func popoverOpeningDoesNotDependOnApplicationActivation() {
         var gate = PopoverPresentationGate()
 
         let initialSchedule = gate.requestPresentation()
-        let beforeActivation = gate.consumePresentation(isApplicationActive: false)
-        let activationSchedule = gate.applicationDidBecomeActive()
-        let afterActivation = gate.consumePresentation(isApplicationActive: true)
-        let duplicatePresentation = gate.consumePresentation(isApplicationActive: true)
+        let presentationWithoutActivation = gate.consumePresentation()
+        let duplicatePresentation = gate.consumePresentation()
 
         #expect(initialSchedule)
-        #expect(!beforeActivation)
-        #expect(activationSchedule)
-        #expect(afterActivation)
+        #expect(presentationWithoutActivation)
         #expect(!duplicatePresentation)
     }
 }

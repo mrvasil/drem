@@ -143,35 +143,121 @@ enum ClamshellSleepGuardWorker {
     }
 }
 
-/// Owns the guard process from the app side. All transitions are serialized so
-/// a late enable cannot outlive a newer disable request.
-enum KeepAwakeClamshellGuard {
-    private static let lifecycleQueue = DispatchQueue(
-        label: "local.mrvasil.drem.clamshell-guard"
-    )
-    private static var process: Process?
-    private static var input: Pipe?
+private final class ClamshellProcessExitSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private let semaphore = DispatchSemaphore(value: 0)
+    private var didExit = false
 
-    static func setEnabled(_ enabled: Bool, completion: @escaping (Bool) -> Void) {
+    func signal() {
+        lock.lock()
+        guard !didExit else {
+            lock.unlock()
+            return
+        }
+        didExit = true
+        lock.unlock()
+        semaphore.signal()
+    }
+
+    func wait(timeout: DispatchTime) -> Bool {
+        lock.lock()
+        let alreadyExited = didExit
+        lock.unlock()
+        return alreadyExited || semaphore.wait(timeout: timeout) == .success
+    }
+}
+
+private final class ClamshellReadySignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private let semaphore = DispatchSemaphore(value: 0)
+    private var completed = false
+    private var byte: UInt8?
+
+    func receive(_ data: Data) {
+        lock.lock()
+        guard !completed else {
+            lock.unlock()
+            return
+        }
+        completed = true
+        byte = data.first
+        lock.unlock()
+        semaphore.signal()
+    }
+
+    func wait(timeout: TimeInterval) -> UInt8? {
+        guard semaphore.wait(timeout: .now() + max(0, timeout)) == .success else {
+            return nil
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        return byte
+    }
+}
+
+/// Serialized owner for the crash-safe closed-lid helper. Every wait is bounded:
+/// a stale Foundation `Process` can never occupy the lifecycle queue forever.
+final class KeepAwakeClamshellGuardController: @unchecked Sendable {
+    private struct Child {
+        let process: Process
+        let input: Pipe
+        let exitSignal: ClamshellProcessExitSignal
+    }
+
+    private let lifecycleQueue: DispatchQueue
+    private let processFactory: () -> Process?
+    private let restoreSleep: () -> Bool
+    private let handshakeTimeout: TimeInterval
+    private let exitTimeout: TimeInterval
+    private let terminationGrace: TimeInterval
+    private var child: Child?
+
+    init(
+        label: String,
+        processFactory: @escaping () -> Process?,
+        restoreSleep: @escaping () -> Bool,
+        handshakeTimeout: TimeInterval,
+        exitTimeout: TimeInterval,
+        terminationGrace: TimeInterval
+    ) {
+        lifecycleQueue = DispatchQueue(label: label)
+        self.processFactory = processFactory
+        self.restoreSleep = restoreSleep
+        self.handshakeTimeout = handshakeTimeout
+        self.exitTimeout = exitTimeout
+        self.terminationGrace = terminationGrace
+    }
+
+    func setEnabled(_ enabled: Bool, completion: @escaping (Bool) -> Void) {
         lifecycleQueue.async {
-            completion(enabled ? startOnQueue() : stopOnQueue())
+            completion(enabled ? self.startOnQueue() : self.stopOnQueue())
         }
     }
 
-    static func restoreSync() -> Bool {
+    func restoreSync() -> Bool {
         lifecycleQueue.sync { stopOnQueue() }
     }
 
-    private static func startOnQueue() -> Bool {
-        if let process, process.isRunning { return true }
-        clearProcessOnQueue()
+    private func startOnQueue() -> Bool {
+        if let child, isAlive(child) { return true }
+        if let child {
+            closeInput(child)
+            _ = stop(child, initialWait: 0)
+            clearChildOnQueue()
+            _ = restoreSleep()
+        }
 
-        guard let executable = Bundle.main.executableURL else { return false }
-        let process = Process()
+        guard let process = processFactory() else { return false }
         let input = Pipe()
         let ready = Pipe()
-        process.executableURL = executable
-        process.arguments = [ClamshellSleepGuardWorker.argument]
+        let readySignal = ClamshellReadySignal()
+        let exitSignal = ClamshellProcessExitSignal()
+        let reader = ready.fileHandleForReading
+
+        reader.readabilityHandler = { handle in
+            readySignal.receive(handle.availableData)
+        }
+        process.terminationHandler = { _ in exitSignal.signal() }
         process.standardInput = input
         process.standardOutput = ready
         process.standardError = FileHandle.nullDevice
@@ -181,48 +267,117 @@ enum KeepAwakeClamshellGuard {
             try? input.fileHandleForReading.close()
             try? ready.fileHandleForWriting.close()
         } catch {
+            reader.readabilityHandler = nil
             try? input.fileHandleForReading.close()
             try? input.fileHandleForWriting.close()
-            try? ready.fileHandleForReading.close()
+            try? reader.close()
             try? ready.fileHandleForWriting.close()
             return false
         }
 
-        let signal = try? ready.fileHandleForReading.read(upToCount: 1)
-        try? ready.fileHandleForReading.close()
-        guard signal == Data([1]), process.isRunning else {
-            try? input.fileHandleForWriting.close()
-            process.waitUntilExit()
+        let candidate = Child(process: process, input: input, exitSignal: exitSignal)
+        let readyByte = readySignal.wait(timeout: handshakeTimeout)
+        reader.readabilityHandler = nil
+        try? reader.close()
+
+        guard readyByte == 1, isAlive(candidate) else {
+            closeInput(candidate)
+            _ = stop(candidate, initialWait: 0)
+            clear(candidate)
             // A failed or interrupted handshake must never leave the durable
             // pmset switch behind.
-            _ = KeepAwakeSudoers.pmsetDisableSleep(false)
+            _ = restoreSleep()
             return false
         }
 
-        self.process = process
-        self.input = input
+        child = candidate
         return true
     }
 
-    private static func stopOnQueue() -> Bool {
-        guard let process else {
-            clearProcessOnQueue()
+    private func stopOnQueue() -> Bool {
+        guard let child else {
+            clearChildOnQueue()
             // Also repairs state left by an older drem build which had no guard.
-            return KeepAwakeSudoers.pmsetDisableSleep(false)
+            return restoreSleep()
         }
 
-        try? input?.fileHandleForWriting.close()
-        process.waitUntilExit()
-        let restored = process.terminationStatus == 0
-        clearProcessOnQueue()
-        return restored || KeepAwakeSudoers.pmsetDisableSleep(false)
+        closeInput(child)
+        _ = stop(child, initialWait: exitTimeout)
+        clearChildOnQueue()
+
+        // Never trust only the child's termination status: if Foundation lost
+        // the exit notification, explicitly reconcile the actual pmset state.
+        return restoreSleep()
     }
 
-    private static func clearProcessOnQueue() {
-        try? input?.fileHandleForReading.close()
-        try? input?.fileHandleForWriting.close()
-        input = nil
-        process = nil
+    private func stop(_ child: Child, initialWait: TimeInterval) -> Bool {
+        if waitForExit(child, timeout: initialWait) { return true }
+
+        let pid = child.process.processIdentifier
+        if Self.kernelReportsAlive(pid) { _ = kill(pid, SIGTERM) }
+        if waitForExit(child, timeout: terminationGrace) { return true }
+
+        if Self.kernelReportsAlive(pid) { _ = kill(pid, SIGKILL) }
+        return waitForExit(child, timeout: terminationGrace)
+    }
+
+    private func waitForExit(_ child: Child, timeout: TimeInterval) -> Bool {
+        if child.exitSignal.wait(timeout: .now()) { return true }
+        guard Self.kernelReportsAlive(child.process.processIdentifier) else { return true }
+        if child.exitSignal.wait(timeout: .now() + max(0, timeout)) { return true }
+        return !Self.kernelReportsAlive(child.process.processIdentifier)
+    }
+
+    private func isAlive(_ child: Child) -> Bool {
+        !child.exitSignal.wait(timeout: .now())
+            && Self.kernelReportsAlive(child.process.processIdentifier)
+    }
+
+    private static func kernelReportsAlive(_ pid: pid_t) -> Bool {
+        guard pid > 0 else { return false }
+        if kill(pid, 0) == 0 { return true }
+        return errno == EPERM
+    }
+
+    private func closeInput(_ child: Child) {
+        try? child.input.fileHandleForWriting.close()
+    }
+
+    private func clearChildOnQueue() {
+        if let child { clear(child) }
+        child = nil
+    }
+
+    private func clear(_ child: Child) {
+        try? child.input.fileHandleForReading.close()
+        try? child.input.fileHandleForWriting.close()
+    }
+}
+
+/// Owns the production guard process from the app side. All transitions are
+/// serialized so a late enable cannot outlive a newer disable request.
+enum KeepAwakeClamshellGuard {
+    private static let controller = KeepAwakeClamshellGuardController(
+        label: "local.mrvasil.drem.clamshell-guard",
+        processFactory: {
+            guard let executable = Bundle.main.executableURL else { return nil }
+            let process = Process()
+            process.executableURL = executable
+            process.arguments = [ClamshellSleepGuardWorker.argument]
+            return process
+        },
+        restoreSleep: { KeepAwakeSudoers.pmsetDisableSleep(false) },
+        handshakeTimeout: 6,
+        exitTimeout: 6,
+        terminationGrace: 0.5
+    )
+
+    static func setEnabled(_ enabled: Bool, completion: @escaping (Bool) -> Void) {
+        controller.setEnabled(enabled, completion: completion)
+    }
+
+    static func restoreSync() -> Bool {
+        controller.restoreSync()
     }
 }
 

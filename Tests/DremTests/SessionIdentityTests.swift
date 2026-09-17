@@ -20,6 +20,45 @@ struct SessionIdentityTests {
         #expect(ActivityLogScanner.classifyCodexLog(continuedAfterCompaction) == .working)
     }
 
+    @Test
+    func turnContextSurvivesASeparateIncrementalFileEvent() async throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Drem-Incremental-Turn-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let directory = home.appendingPathComponent(".codex/sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let log = directory.appendingPathComponent("split-turn.jsonl")
+        try Data("""
+        {"type":"session_meta","payload":{"id":"split-turn","cwd":"/tmp/split-project"}}
+        {"timestamp":"2026-09-14T07:45:57Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer"}}
+
+        """.utf8).write(to: log)
+        let process = DetectedAgentProcess(
+            id: 303, parentPID: 1, kind: .codex, elapsed: "01:00", state: "S", command: "codex",
+            workingDirectory: "/tmp/split-project", openTranscriptPaths: [log.path]
+        )
+        let engine = LiveActivityEngine(homeDirectory: home)
+        let initial = await engine.reconcile(processes: [process])
+        #expect(!initial.snapshot.hasWorkingAgent)
+
+        let handle = try FileHandle(forWritingTo: log)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("""
+        {"timestamp":"2026-09-14T07:45:58Z","type":"turn_context","payload":{}}
+
+        """.utf8))
+        let boundary = await engine.handleFileEvents([log.path])
+        #expect(!boundary.snapshot.hasWorkingAgent, "A turn boundary alone is not work")
+
+        try handle.write(contentsOf: Data("""
+        {"timestamp":"2026-09-14T07:46:10Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary"}}
+
+        """.utf8))
+        let continued = await engine.handleFileEvents([log.path])
+        #expect(continued.snapshot.status(for: .codex).workingSessions.map(\.id) == ["split-turn"])
+    }
+
     @Test(arguments: [false, true])
     func boundSessionsAreNotHiddenByNewerLogsInTheSameFolder(olderIsWorking: Bool) async throws {
         let home = FileManager.default.temporaryDirectory

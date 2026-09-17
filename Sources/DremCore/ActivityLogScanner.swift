@@ -214,9 +214,21 @@ public struct ActivityLogScanner: Sendable {
         _ text: String,
         previousState: AgentActivity? = nil
     ) -> TranscriptActivityEvidence? {
+        var acceptsWorkAfterBoundary = false
+        return codexEvidence(
+            text,
+            previousState: previousState,
+            acceptsWorkAfterBoundary: &acceptsWorkAfterBoundary
+        )
+    }
+
+    static func codexEvidence(
+        _ text: String,
+        previousState: AgentActivity?,
+        acceptsWorkAfterBoundary: inout Bool
+    ) -> TranscriptActivityEvidence? {
         var state: AgentActivity?
         var timestamp: String?
-        var acceptsWorkAfterBoundary = false
 
         for object in JSONObjects.lines(in: text) {
             var eventState: AgentActivity?

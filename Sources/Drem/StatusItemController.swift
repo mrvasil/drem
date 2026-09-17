@@ -16,15 +16,10 @@ struct PopoverPresentationGate {
         return scheduleIfNeeded()
     }
 
-    mutating func applicationDidBecomeActive() -> Bool {
-        guard isRequested else { return false }
-        return scheduleIfNeeded()
-    }
-
-    mutating func consumePresentation(isApplicationActive: Bool) -> Bool {
+    mutating func consumePresentation() -> Bool {
         guard isScheduled else { return false }
         isScheduled = false
-        guard isRequested, isApplicationActive else { return false }
+        guard isRequested else { return false }
         isRequested = false
         return true
     }
@@ -79,24 +74,19 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
 
     func showPopover() {
         let shouldSchedule = popoverPresentationGate.requestPresentation()
-        NSApp.activate(ignoringOtherApps: true)
         if shouldSchedule { schedulePopoverPresentation() }
     }
 
     private func schedulePopoverPresentation() {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            guard self.popoverPresentationGate.consumePresentation(
-                isApplicationActive: NSApp.isActive
-            ) else { return }
+            guard self.popoverPresentationGate.consumePresentation() else { return }
             self.presentPopover()
         }
     }
 
     private func presentPopover() {
         guard let button = statusItem.button else { return }
-        installPopoverContentIfNeeded()
-        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
     }
@@ -115,9 +105,13 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
 
     private func configurePopover() {
         popover.behavior = .transient
-        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        // A tray control should feel as immediate as a system menu. Building
+        // the host at launch and skipping the expanding animation keeps the
+        // first click on the same fast path as every later click.
+        popover.animates = false
         popover.delegate = self
         popover.contentSize = NSSize(width: 340, height: 300)
+        installPopoverContentIfNeeded()
     }
 
     private func configureApplicationMenu() {
@@ -195,15 +189,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
     }
 
     private func bind() {
-        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                if self.popoverPresentationGate.applicationDidBecomeActive() {
-                    self.schedulePopoverPresentation()
-                }
-            }
-            .store(in: &cancellables)
-
         monitor.$snapshot
             .map { $0.workingCount }
             .removeDuplicates()

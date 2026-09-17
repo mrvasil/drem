@@ -7,6 +7,13 @@ application bundle.
 
 ### Fixed
 
+- Open the tray panel on the first click even when the accessory app remains
+  inactive, with its content preloaded and no delayed expanding animation.
+- Keep closed-lid protection recoverable when its helper exits unexpectedly or
+  stops responding; bounded cleanup now restores normal sleep and leaves later
+  enable requests able to run.
+- Keep long-running Codex turns visible when `turn_context` and the following
+  reasoning or tool work arrive in separate filesystem event batches.
 - Keep Codex `/goal` sessions working across automatic turn completions by
   observing the local goal registry; stop on paused, blocked, limited or
   completed status without adding a polling loop.
