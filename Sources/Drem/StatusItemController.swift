@@ -123,6 +123,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
         let show = NSMenuItem(title: "Показать агентов", action: #selector(openPopover), keyEquivalent: "1")
         show.target = self
         appMenu.addItem(show)
+        let island = NSMenuItem(title: "Показать остров", action: #selector(showIsland), keyEquivalent: "2")
+        island.target = self
+        appMenu.addItem(island)
         let settings = NSMenuItem(title: "Настройки…", action: #selector(showSettings), keyEquivalent: ",")
         settings.target = self
         appMenu.addItem(settings)
@@ -145,7 +148,8 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
             rootView: StatusPanel(
                 presentation: presentation, keepAwake: keepAwake, awayMode: awayMode,
                 openSettings: { [weak self] in self?.showSettings() },
-                refresh: { [weak self] in self?.refreshAgents() }
+                refresh: { [weak self] in self?.refreshAgents() },
+                showIsland: { [weak self] in self?.showIsland() }
             )
         )
         if #available(macOS 13.0, *) {
@@ -290,6 +294,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
         )
         openItem.target = self
         menu.addItem(openItem)
+        let islandItem = NSMenuItem(title: "Показать остров", action: #selector(showIsland), keyEquivalent: "2")
+        islandItem.target = self
+        menu.addItem(islandItem)
 
         let refreshItem = NSMenuItem(
             title: "Обновить агентов",
@@ -331,6 +338,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
 
     @objc private func openPopover() {
         showPopover()
+    }
+
+    @objc private func showIsland() {
+        popover.performClose(nil)
+        NotificationCenter.default.post(name: IslandPreferences.showNotification, object: nil)
     }
 
     @objc private func refreshAgents() {

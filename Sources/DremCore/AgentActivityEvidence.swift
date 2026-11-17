@@ -11,11 +11,12 @@ public enum AgentActivityEvidence {
               session.updatedAt.timeIntervalSince1970 < floor(startedAt.timeIntervalSince1970) else {
             return session
         }
-        // Resuming a transcript does not resume its historical work. Hooks use
+        // Resuming a transcript does not resume its historical work. Legacy hooks use
         // whole seconds, so accept evidence in the process's first second.
         return AgentSessionActivity(
             id: session.id, kind: session.kind, state: .idle, updatedAt: startedAt,
-            projectName: session.projectName, processID: session.processID, source: session.source
+            projectName: session.projectName, processID: session.processID, source: session.source,
+            workingDirectory: session.workingDirectory, sessionTitle: session.sessionTitle
         )
     }
 
@@ -29,7 +30,57 @@ public enum AgentActivityEvidence {
             if let previous = bySession[key], previous.updatedAt > session.updatedAt { continue }
             bySession[key] = session
         }
-        return bySession.values.sorted { $0.updatedAt > $1.updatedAt }
+        return bySession.values.map { session in
+            // A newer working hook wins activity, but need not erase detail
+            // from the same turn. Never revive detail across a newer start.
+            guard session.state == .working, session.detail == nil,
+                  let detail = transcripts.first(where: {
+                      $0.kind == session.kind && $0.id == session.id && $0.state == .working
+                  })?.detail,
+                  let confirmed = detail.confirmedAt,
+                  confirmed.timeIntervalSince1970 >= floor(session.updatedAt.timeIntervalSince1970) else {
+                return session
+            }
+            return AgentSessionActivity(id: session.id, kind: session.kind, state: session.state,
+                updatedAt: session.updatedAt, projectName: session.projectName,
+                processID: session.processID, source: session.source, detail: detail,
+                workingDirectory: session.workingDirectory, sessionTitle: session.sessionTitle)
+        }.map { session in
+            mergeAttention(session, hooks: hooks, transcripts: transcripts)
+        }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private static func mergeAttention(_ session: AgentSessionActivity,
+                                       hooks: [AgentSessionActivity],
+                                       transcripts: [AgentSessionActivity]) -> AgentSessionActivity {
+        guard session.state == .working else { return session }
+        let transcript = transcripts.first { $0.kind == session.kind && $0.id == session.id }
+        let hook = hooks.first { $0.kind == session.kind && $0.id == session.id }
+        let transcriptDetail = transcript?.state == .working ? transcript?.detail : nil
+        let hookDetail = hook?.state == .working ? hook?.detail : nil
+        var attention = transcriptDetail?.attention
+        var evidenceAt = transcriptDetail?.attentionUpdatedAt
+        let continuation = transcriptDetail?.attentionContinuationAt
+        if let hookAt = hookDetail?.attentionUpdatedAt,
+           (attention == nil || hookAt > (evidenceAt ?? .distantPast)),
+           hookAt > (continuation ?? .distantPast) {
+            attention = hookDetail?.attention
+            evidenceAt = hookAt
+        }
+        // A lifecycle hook can close an old wait without any further transcript
+        // write. Compare its activity time, not the notification receipt time.
+        if let hook, hookDetail?.attention == nil,
+           hook.updatedAt > (evidenceAt ?? .distantPast) {
+            attention = nil
+        }
+        var detail = session.detail
+        if detail == nil, attention != nil { detail = AgentActivityDetail() }
+        detail?.attention = attention
+        detail?.attentionUpdatedAt = evidenceAt
+        return AgentSessionActivity(id: session.id, kind: session.kind, state: session.state,
+            updatedAt: session.updatedAt, projectName: session.projectName, processID: session.processID,
+            source: session.source, detail: detail,
+            workingDirectory: session.workingDirectory, sessionTitle: session.sessionTitle)
     }
 
     public static func applyingActiveCodexGoals(
@@ -47,7 +98,9 @@ public enum AgentActivityEvidence {
                 updatedAt: max(session.updatedAt, goalUpdatedAt),
                 projectName: session.projectName,
                 processID: session.processID,
-                source: .goal
+                source: .goal,
+                detail: session.state == .working ? session.detail : nil,
+                workingDirectory: session.workingDirectory, sessionTitle: session.sessionTitle
             )
         }.sorted { $0.updatedAt > $1.updatedAt }
     }

@@ -90,13 +90,19 @@ make install
 
 | Агент | События установщика |
 | :--- | :--- |
-| Codex | `SessionStart`, `UserPromptSubmit`, `Stop`, `Interrupt`, `SessionEnd` |
-| Claude Code | `SessionStart`, `UserPromptSubmit`, `Stop`, `StopFailure`, `SessionEnd` |
+| Codex | `SessionStart`, `UserPromptSubmit`, `PreCompact`, `PostCompact`, `Stop`, `Interrupt`, `SessionEnd` |
+| Claude Code | `SessionStart`, `UserPromptSubmit`, `PreCompact`, `PostCompact`, `Stop`, `StopFailure`, `SessionEnd` |
 
 Это список записей нашего установщика, а не гарантия наличия каждого события
 во всех версиях агента. В Codex проверь `/hooks`, если требуется доверие.
 Уже открытая сессия может продолжить работу через fallback; для применения
 обновлённых hooks иногда нужен новый запуск агента.
+
+`PreCompact` отмечает сжатие контекста как работу. После автоматического
+сжатия агент остаётся рабочим; после ручного `/compact` возвращается в простой.
+`SessionStart` с `source: compact` не сбрасывает продолжающуюся задачу.
+Для непрерывного отслеживания сжатия нужны эти hooks: один журнал может
+записать итоговый текст сжатия как обычный финальный ответ.
 
 ## Артефакты CI и релизы
 

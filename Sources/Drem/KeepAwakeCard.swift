@@ -131,6 +131,8 @@ struct KeepAwakeSettings: View {
     @AppStorage(KeepAwakeDefaultsKey.iconTint) private var iconTint = KeepAwakeIconTint.none.rawValue
     @AppStorage(KeepAwakeDefaultsKey.activeIcon) private var activeIcon = KeepAwakeActiveIcon.drem.rawValue
     @AppStorage(KeepAwakeDefaultsKey.showCountdown) private var showCountdown = false
+    @AppStorage(IslandPreferences.enabled) private var islandEnabled = false
+    @AppStorage(IslandPreferences.publicStatus) private var islandPublicStatus = true
 
     var body: some View {
         TabView {
@@ -226,6 +228,16 @@ struct KeepAwakeSettings: View {
     }
     private var appearanceSettings: some View {
         Form {
+            Section {
+                Toggle("Остров у выреза", isOn: $islandEnabled)
+                Toggle("Показывать текст статусов", isOn: $islandPublicStatus)
+                    .disabled(!islandEnabled)
+                if IslandController.notchedScreen() == nil {
+                    Text("Нужен встроенный экран MacBook с вырезом.").foregroundStyle(.secondary)
+                }
+            } header: { Text("drem Island") } footer: {
+                Text("Появляется при работе агентов, в том числе поверх полноэкранных приложений. Наведите курсор для сводки, нажмите для подробностей. Смахните вверх, чтобы скрыть до следующего цикла. Текст статусов может содержать приватные сведения из чата.")
+            }
             Section("Иконка при включённом блокировщике") {
                 Picker("Символ", selection: $activeIcon) {
                     ForEach(KeepAwakeActiveIcon.allCases) { Text($0.title).tag($0.rawValue) }

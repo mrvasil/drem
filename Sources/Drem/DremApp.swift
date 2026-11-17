@@ -33,6 +33,7 @@ final class DremAppDelegate: NSObject, NSApplicationDelegate, UNUserNotification
     private var closedLidBrightness: ClosedLidBrightnessController?
     private var lidStateMonitor: LidStateMonitor?
     private var awayMode: AwayModeController?
+    private var island: IslandController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -64,6 +65,7 @@ final class DremAppDelegate: NSObject, NSApplicationDelegate, UNUserNotification
             brightness.lidMonitoringDidFail()
             awayMode.lidMonitoringDidFail()
         }
+        island = IslandController(monitor: monitor, lidMonitor: lidStateMonitor, keepAwake: keepAwake)
 
         if Bundle.main.bundleIdentifier != nil {
             UNUserNotificationCenter.current().delegate = self
@@ -96,6 +98,7 @@ final class DremAppDelegate: NSObject, NSApplicationDelegate, UNUserNotification
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        island?.shutdown()
         awayMode?.shutdown()
         closedLidBrightness?.shutdown()
         lidStateMonitor?.shutdown()

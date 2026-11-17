@@ -79,6 +79,9 @@ public struct AgentSessionActivity: Codable, Identifiable, Equatable, Sendable {
     public let projectName: String?
     public let processID: Int32?
     public let source: ActivitySource
+    public let detail: AgentActivityDetail?
+    public let workingDirectory: String?
+    public let sessionTitle: String?
 
     public init(
         id: String,
@@ -87,7 +90,10 @@ public struct AgentSessionActivity: Codable, Identifiable, Equatable, Sendable {
         updatedAt: Date,
         projectName: String?,
         processID: Int32?,
-        source: ActivitySource
+        source: ActivitySource,
+        detail: AgentActivityDetail? = nil,
+        workingDirectory: String? = nil,
+        sessionTitle: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -96,6 +102,9 @@ public struct AgentSessionActivity: Codable, Identifiable, Equatable, Sendable {
         self.projectName = projectName
         self.processID = processID
         self.source = source
+        self.detail = detail
+        self.workingDirectory = workingDirectory
+        self.sessionTitle = sessionTitle
     }
 }
 

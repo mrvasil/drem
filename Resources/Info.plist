@@ -26,5 +26,7 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>drem переключает терминал на вкладку выбранного агента только по вашему нажатию. Содержимое терминала не читается.</string>
 </dict>
 </plist>

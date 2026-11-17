@@ -77,7 +77,10 @@ def add_event(hooks: dict, event: str, provider: str) -> None:
         for group in groups
         if not isinstance(group, dict) or group.get("hooks")
     ]
-    groups.append({"hooks": [handler(provider)]})
+    group = {"hooks": [handler(provider)]}
+    if provider == "claude" and event == "Notification":
+        group["matcher"] = "^permission_prompt$"
+    groups.append(group)
 
 
 def remove_drem_handlers(hooks: dict) -> None:
@@ -146,12 +149,12 @@ def main() -> int:
     install(
         INSTALL_HOME / ".codex/hooks.json",
         "codex",
-        ["SessionStart", "UserPromptSubmit", "Stop", "Interrupt", "SessionEnd"],
+        ["SessionStart", "UserPromptSubmit", "PreCompact", "PostCompact", "Stop", "Interrupt", "SessionEnd"],
     )
     install(
         INSTALL_HOME / ".claude/settings.json",
         "claude",
-        ["SessionStart", "UserPromptSubmit", "Stop", "StopFailure", "SessionEnd"],
+        ["SessionStart", "UserPromptSubmit", "PreCompact", "PostCompact", "Stop", "StopFailure", "SessionEnd", "Notification"],
     )
     return 0
 

@@ -106,8 +106,28 @@ struct AgentActivityTests {
         #expect(manager.sessionTrigger == .automation)
         #expect(ownedAssertions.isSubset(of: try kernelAssertionIDs()), "Ownership transfer keeps the same kernel assertions")
 
+        let compactionInput = try JSONDecoder().decode(HookInput.self, from: Data("""
+        {"session_id":"event-session","cwd":"/tmp/event-project","hook_event_name":"PreCompact","trigger":"auto"}
+        """.utf8))
+        let compactDate = Date().addingTimeInterval(2)
+        try HookStateStore(homeDirectory: home).record(
+            input: compactionInput, kind: .codex, processID: nil, now: compactDate
+        )
+        let compactStamp = ISO8601DateFormatter().string(from: compactDate.addingTimeInterval(1))
         try handle.write(contentsOf: Data("""
-        {"timestamp":"\(stamp)","type":"event_msg","payload":{"type":"task_complete"}}
+        {"timestamp":"\(compactStamp)","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer"}}
+
+        """.utf8))
+        let compactPaths = try await waitForChange(stream, path: log.path)
+        let compacting = await engine.handleFileEvents(compactPaths)
+        #expect(compacting.snapshot.workingCount == 1)
+        manager.agentActivityDidChange(hasWorkingAgent: compacting.snapshot.hasWorkingAgent)
+        #expect(ownedAssertions.isSubset(of: try kernelAssertionIDs()), "Compaction keeps the original kernel assertions")
+        #expect(manager.clamshellActive)
+        #expect(lidWrites == [true], "Compaction must not toggle closed-lid sleep protection")
+
+        try handle.write(contentsOf: Data("""
+        {"timestamp":"\(compactStamp)","type":"event_msg","payload":{"type":"task_complete"}}
 
         """.utf8))
         let stopPaths = try await waitForChange(stream, path: log.path)

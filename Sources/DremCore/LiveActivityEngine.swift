@@ -24,6 +24,8 @@ public actor LiveActivityEngine {
     private let hookStore: HookStateStore
     private let incrementalScanner: IncrementalTranscriptScanner
     private let goalRegistry: CodexGoalRegistry
+    private let titleIndex: SessionTitleIndex
+    private var codexTitles: [String: String] = [:]
     private var processes: [DetectedAgentProcess] = []
     private var transcriptSessions: [SessionKey: TrackedSession] = [:]
     private var knownHookSessions = Set<SessionKey>()
@@ -35,6 +37,7 @@ public actor LiveActivityEngine {
         hookStore = HookStateStore(homeDirectory: homeDirectory)
         incrementalScanner = IncrementalTranscriptScanner()
         goalRegistry = CodexGoalRegistry(homeDirectory: homeDirectory)
+        titleIndex = SessionTitleIndex(homeDirectory: homeDirectory)
     }
 
     public func bootstrap() throws -> LiveActivityState {
@@ -49,6 +52,7 @@ public actor LiveActivityEngine {
     public func reconcile(processes: [DetectedAgentProcess]) -> LiveActivityState {
         let processes = ClaudeSessionRegistry(homeDirectory: homeDirectory).applying(to: processes)
         self.processes = processes
+        codexTitles = titleIndex.read()
         refreshActiveCodexGoals()
         let transcriptRecords = ActivityLogScanner(homeDirectory: homeDirectory)
             .scanTranscriptRecords(processes: processes)
@@ -76,6 +80,8 @@ public actor LiveActivityEngine {
     }
 
     public func handleFileEvents(_ paths: [String]) -> LiveActivityState {
+        let hookRecords = hookStore.readAll()
+        if paths.contains(where: titleIndex.contains) { codexTitles = titleIndex.read() }
         var needsReconciliation = ClaudeSessionRegistry(homeDirectory: homeDirectory)
             .needsDiscovery(for: paths, processes: processes)
 
@@ -92,7 +98,7 @@ public actor LiveActivityEngine {
                 continue
             }
 
-            guard let result = incrementalScanner.consume(url: url, kind: kind) else { continue }
+            guard let result = incrementalScanner.consume(url: url, kind: kind, hooks: hookRecords) else { continue }
             let key = SessionKey(kind: kind, id: result.session.id)
             let linkedProcessID = matchingProcessID(
                 kind: kind,
@@ -107,7 +113,9 @@ public actor LiveActivityEngine {
                 updatedAt: result.session.updatedAt,
                 projectName: result.session.projectName,
                 processID: linkedProcessID,
-                source: result.session.source
+                source: result.session.source,
+                detail: result.session.detail,
+                sessionTitle: result.session.sessionTitle
             )
             transcriptSessions[key] = TrackedSession(
                 activity: linkedSession,
@@ -125,7 +133,6 @@ public actor LiveActivityEngine {
         }
 
         let now = Date()
-        let hookRecords = hookStore.readAll()
         let hookKeys = Set(hookRecords.map { SessionKey(kind: $0.kind, id: $0.sessionID) })
         if !hookKeys.subtracting(knownHookSessions).isEmpty {
             needsReconciliation = true
@@ -156,10 +163,11 @@ public actor LiveActivityEngine {
     /// a missed task-start event is repaired as well as a missed task completion.
     public func recheckTrackedTranscripts() -> LiveActivityState {
         let trackedSessions = transcriptSessions
+        let hookRecords = hookStore.readAll()
 
         for (key, tracked) in trackedSessions {
             let url = URL(fileURLWithPath: tracked.transcriptPath)
-            guard let result = incrementalScanner.consume(url: url, kind: key.kind) else {
+            guard let result = incrementalScanner.consume(url: url, kind: key.kind, hooks: hookRecords) else {
                 continue
             }
 
@@ -176,7 +184,9 @@ public actor LiveActivityEngine {
                 updatedAt: result.session.updatedAt,
                 projectName: result.session.projectName,
                 processID: linkedProcessID,
-                source: result.session.source
+                source: result.session.source,
+                detail: result.session.detail,
+                sessionTitle: result.session.sessionTitle
             )
             transcriptSessions[key] = TrackedSession(
                 activity: session,
@@ -234,7 +244,9 @@ public actor LiveActivityEngine {
                     updatedAt: record.updatedAt,
                     projectName: URL(fileURLWithPath: record.cwd).lastPathComponent,
                     processID: linkedProcessID,
-                    source: .hook
+                    source: .hook,
+                    detail: record.detail,
+                    sessionTitle: record.sessionTitle
                 )
             }
 
@@ -252,8 +264,22 @@ public actor LiveActivityEngine {
             }
 
             let merged = AgentActivityEvidence.merge(hooks: hooks, transcripts: transcripts).map { session in
-                AgentActivityEvidence.forProcessLifetime(
-                    session, startedAt: kindProcesses.first { $0.id == session.processID }?.startedAt
+                let process = kindProcesses.first { $0.id == session.processID }
+                let directory = process?.workingDirectory
+                    ?? hookRecords.first { $0.kind == session.kind && $0.sessionID == session.id }?.cwd
+                    ?? transcriptSessions[SessionKey(kind: session.kind, id: session.id)]?.workingDirectory
+                // A transcript's original cwd can predate a project rename.
+                // Use only its already-bound PID; never relax identity matching.
+                let named = AgentSessionActivity(id: session.id, kind: session.kind, state: session.state,
+                    updatedAt: session.updatedAt,
+                    projectName: process?.workingDirectory.map { URL(fileURLWithPath: $0).lastPathComponent } ?? session.projectName,
+                    processID: session.processID, source: session.source, detail: session.detail,
+                    workingDirectory: directory,
+                    sessionTitle: session.kind == .codex ? codexTitles[session.id] : session.sessionTitle
+                        ?? transcripts.first { $0.id == session.id }?.sessionTitle
+                        ?? hookRecords.first { $0.kind == session.kind && $0.sessionID == session.id }?.sessionTitle)
+                return AgentActivityEvidence.forProcessLifetime(
+                    named, startedAt: process?.startedAt
                 )
             }
             let sessions = AgentActivityEvidence.applyingActiveCodexGoals(
@@ -284,7 +310,7 @@ public actor LiveActivityEngine {
                 transcriptSessions.values.map(\.transcriptPath)
                     + processes.flatMap(\.openTranscriptPaths)
             )).sorted(),
-            goalDatabasePaths: goalRegistry.observedPaths,
+            goalDatabasePaths: goalRegistry.observedPaths + [titleIndex.url.path],
             needsProcessReconciliation: needsProcessReconciliation
         )
     }

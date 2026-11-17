@@ -54,10 +54,12 @@ public struct ActivityLogScanner: Sendable {
     public func scanTranscriptRecords(
         processes: [DetectedAgentProcess]
     ) -> [TranscriptActivityRecord] {
-        AgentKind.allCases.flatMap { kind in
+        let hooks = HookStateStore(homeDirectory: homeDirectory).readAll()
+        return AgentKind.allCases.flatMap { kind in
             scanTranscripts(
                 kind: kind,
-                processes: processes.filter { $0.kind == kind }
+                processes: processes.filter { $0.kind == kind },
+                hooks: hooks
             )
         }
     }
@@ -97,7 +99,8 @@ public struct ActivityLogScanner: Sendable {
 
     private func scanTranscripts(
         kind: AgentKind,
-        processes: [DetectedAgentProcess]
+        processes: [DetectedAgentProcess],
+        hooks: [HookStateRecord]
     ) -> [TranscriptActivityRecord] {
         guard !processes.isEmpty else { return [] }
 
@@ -146,10 +149,14 @@ public struct ActivityLogScanner: Sendable {
                 for: candidate.url, sessionID: metadata.sessionID, cwd: cwd, processes: processes
             ) else { continue }
 
-            guard let tail = readTail(candidate.url),
-                  let evidence = kind == .codex
-                    ? Self.codexEvidence(tail)
-                    : Self.claudeEvidence(tail) else {
+            guard let tail = readTail(candidate.url) else { continue }
+            let objects = JSONObjects.lines(in: tail)
+            var boundary = false
+            let compactingSince = hooks.first { $0.kind == kind && $0.sessionID == metadata.sessionID }?.compactionStartedAt
+            guard let evidence = kind == .codex
+                    ? Self.codexEvidence(objects, previousState: nil, acceptsWorkAfterBoundary: &boundary,
+                                         compactingSince: compactingSince)
+                    : Self.claudeEvidence(objects, compactingSince: compactingSince) else {
                 continue
             }
 
@@ -163,7 +170,9 @@ public struct ActivityLogScanner: Sendable {
                         updatedAt: evidence.timestamp ?? candidate.modifiedAt,
                         projectName: projectName(for: cwd),
                         processID: processID,
-                        source: .transcript
+                        source: .transcript,
+                        detail: evidence.state == .working ? AgentDetailParser.consume(objects, kind: kind) : nil,
+                        sessionTitle: SessionTitle.consume(objects, kind: kind)
                     ),
                     workingDirectory: cwd,
                     transcriptPath: candidate.url.standardizedFileURL.path
@@ -227,10 +236,20 @@ public struct ActivityLogScanner: Sendable {
         previousState: AgentActivity?,
         acceptsWorkAfterBoundary: inout Bool
     ) -> TranscriptActivityEvidence? {
+        codexEvidence(JSONObjects.lines(in: text), previousState: previousState,
+                      acceptsWorkAfterBoundary: &acceptsWorkAfterBoundary)
+    }
+
+    static func codexEvidence(
+        _ objects: [[String: Any]],
+        previousState: AgentActivity?,
+        acceptsWorkAfterBoundary: inout Bool,
+        compactingSince: Date? = nil
+    ) -> TranscriptActivityEvidence? {
         var state: AgentActivity?
         var timestamp: String?
 
-        for object in JSONObjects.lines(in: text) {
+        for object in objects {
             var eventState: AgentActivity?
             let type = object["type"] as? String
             let payload = object["payload"] as? [String: Any]
@@ -256,7 +275,8 @@ public struct ActivityLogScanner: Sendable {
                 let phase = payload?["phase"] as? String
                 if role == "user" {
                     eventState = .working
-                } else if role == "assistant", phase == "final_answer" {
+                } else if role == "assistant", phase == "final_answer",
+                          !isCompactionSummary(object, since: compactingSince) {
                     eventState = .idle
                 }
             }
@@ -289,10 +309,14 @@ public struct ActivityLogScanner: Sendable {
     }
 
     static func claudeEvidence(_ text: String) -> TranscriptActivityEvidence? {
+        claudeEvidence(JSONObjects.lines(in: text))
+    }
+
+    static func claudeEvidence(_ objects: [[String: Any]], compactingSince: Date? = nil) -> TranscriptActivityEvidence? {
         var state: AgentActivity?
         var timestamp: String?
 
-        for object in JSONObjects.lines(in: text) {
+        for object in objects {
             var eventState: AgentActivity?
             let type = object["type"] as? String
             if type == "user" {
@@ -300,7 +324,7 @@ public struct ActivityLogScanner: Sendable {
             } else if type == "assistant",
                       let message = object["message"] as? [String: Any],
                       let stopReason = message["stop_reason"] as? String {
-                if stopReason == "end_turn" {
+                if stopReason == "end_turn", !isCompactionSummary(object, since: compactingSince) {
                     eventState = .idle
                 } else if stopReason == "tool_use" {
                     eventState = .working
@@ -313,6 +337,17 @@ public struct ActivityLogScanner: Sendable {
         }
 
         return state.map { TranscriptActivityEvidence(state: $0, timestamp: timestamp) }
+    }
+
+    private static func isCompactionSummary(_ object: [String: Any], since: Date?) -> Bool {
+        guard let since else { return false }
+        // PreCompact proves that the final assistant message belongs to the
+        // summarizer, not the user turn. Explicit task_complete/turn_aborted
+        // and Stop/Interrupt still terminate normally. Never suppress history.
+        guard let timestamp = TranscriptActivityEvidence(
+            state: .idle, timestamp: object["timestamp"] as? String
+        ).timestamp else { return false }
+        return timestamp >= since
     }
 
     private func metadata(for url: URL, kind: AgentKind) -> (sessionID: String, cwd: String)? {
@@ -401,7 +436,7 @@ public struct ActivityLogScanner: Sendable {
     }
 }
 
-private enum JSONObjects {
+enum JSONObjects {
     static func lines(in text: String) -> [[String: Any]] {
         text.split(whereSeparator: \Character.isNewline).compactMap { line in
             guard let data = line.data(using: .utf8),
