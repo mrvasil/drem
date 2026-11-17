@@ -435,17 +435,26 @@ enum KeepAwakeSudoers {
     static let legacyRulePath = "/etc/sudoers.d/agent-watch-clamshell"
     private static let sleepStateQueue = DispatchQueue(label: "local.mrvasil.drem.pmset-state")
 
-    static func isConfigured() -> Bool {
-        // A different utility may have installed an identical uid-based rule.
-        // Require our own file so drem remains self-contained and does
-        // not silently lose this capability when that other app is removed.
-        guard ruleFilePresent else { return false }
-        return sleepStateQueue.sync {
-            let report = KeepAwakeShell.run("/usr/bin/pmset", ["-g"])
-            guard report.status == 0 else { return false }
-            let enabled = KeepAwakeSudoersSupport.sleepDisabled(inPmsetOutput: report.output)
-            return pmsetDisableSleepOnQueue(enabled)
+    typealias CommandRunner = (String, [String]) -> (status: Int32, output: String)
+
+    static func isConfigured(
+        rulePresent: Bool? = nil,
+        run: CommandRunner = { KeepAwakeShell.run($0, $1) }
+    ) -> Bool {
+        // Accept both current and legacy installations. Listing an exact command
+        // checks authorization without executing pmset or racing guard cleanup.
+        guard rulePresent ?? ruleFilePresent else { return false }
+        return ["0", "1"].allSatisfy { value in
+            run("/usr/bin/sudo", ["-n", "-l", "/usr/bin/pmset", "disablesleep", value]).status == 0
         }
+    }
+
+    static func sleepDisabledState(
+        run: CommandRunner = { KeepAwakeShell.run($0, $1) }
+    ) -> Bool? {
+        let report = run("/usr/bin/pmset", ["-g"])
+        guard report.status == 0 else { return nil }
+        return KeepAwakeSudoersSupport.sleepDisabledState(inPmsetOutput: report.output)
     }
 
     static var ruleFilePresent: Bool {

@@ -1,6 +1,7 @@
 import Foundation
 
 public struct LiveActivityState: Sendable {
+    public let revision: UInt64
     public let snapshot: AgentSnapshot
     public let processIDs: [Int32]
     public let transcriptPaths: [String]
@@ -22,6 +23,19 @@ public actor LiveActivityEngine {
 
     private let homeDirectory: URL
     private let hookStore: HookStateStore
+    private let hookCache: HookStateCache
+    private let eventPaths: ActivityEventPaths
+    private let now: @Sendable () -> Date
+    private var revision: UInt64 = 0
+    private var lastState: LiveActivityState?
+    private let uptime: @Sendable () -> TimeInterval
+    private struct ProgressLease {
+        let evidenceAt: Date
+        let deadline: TimeInterval
+    }
+    private var progressLeases: [SessionKey: ProgressLease] = [:]
+    private var unavailableProcessIDs = Set<Int32>()
+    private var goalFingerprints: [FileFingerprint?] = []
     private let incrementalScanner: IncrementalTranscriptScanner
     private let goalRegistry: CodexGoalRegistry
     private let titleIndex: SessionTitleIndex
@@ -32,9 +46,15 @@ public actor LiveActivityEngine {
     private var hookProcessIDs: [SessionKey: Int32] = [:]
     private var activeCodexGoals: [String: Date] = [:]
 
-    public init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) {
+    public init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+                now: @escaping @Sendable () -> Date = { Date() },
+                uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.homeDirectory = homeDirectory
         hookStore = HookStateStore(homeDirectory: homeDirectory)
+        hookCache = HookStateCache(store: hookStore)
+        eventPaths = ActivityEventPaths(homeDirectory: homeDirectory)
+        self.now = now
+        self.uptime = uptime
         incrementalScanner = IncrementalTranscriptScanner()
         goalRegistry = CodexGoalRegistry(homeDirectory: homeDirectory)
         titleIndex = SessionTitleIndex(homeDirectory: homeDirectory)
@@ -52,10 +72,13 @@ public actor LiveActivityEngine {
     public func reconcile(processes: [DetectedAgentProcess]) -> LiveActivityState {
         let processes = ClaudeSessionRegistry(homeDirectory: homeDirectory).applying(to: processes)
         self.processes = processes
+        unavailableProcessIDs = Set(processes.filter { $0.state.hasPrefix("T") || $0.state.hasPrefix("Z") }.map(\.id))
+        hookCache.refresh()
+        let hookRecords = hookCache.records
         codexTitles = titleIndex.read()
         refreshActiveCodexGoals()
         let transcriptRecords = ActivityLogScanner(homeDirectory: homeDirectory)
-            .scanTranscriptRecords(processes: processes)
+            .scanTranscriptRecords(processes: processes, hooks: hookRecords)
 
         transcriptSessions = Dictionary(
             uniqueKeysWithValues: transcriptRecords.map { record in
@@ -70,7 +93,7 @@ public actor LiveActivityEngine {
                 )
             }
         )
-        let hookRecords = hookStore.readAll()
+        incrementalScanner.retain(paths: Set(transcriptSessions.values.map(\.transcriptPath)))
         knownHookSessions = Set(hookRecords.map {
             SessionKey(kind: $0.kind, id: $0.sessionID)
         })
@@ -80,12 +103,17 @@ public actor LiveActivityEngine {
     }
 
     public func handleFileEvents(_ paths: [String]) -> LiveActivityState {
-        let hookRecords = hookStore.readAll()
+        let paths = paths.filter(eventPaths.contains)
+        if paths.isEmpty, let lastState { return lastState }
+        let rootEvent = paths.contains(where: eventPaths.requiresDiscovery)
+        if rootEvent || paths.contains(where: hookCache.containsEventPath)
+            || paths.contains(where: { transcriptKind(for: $0) != nil }) { hookCache.refresh() }
+        let hookRecords = hookCache.records
         if paths.contains(where: titleIndex.contains) { codexTitles = titleIndex.read() }
-        var needsReconciliation = ClaudeSessionRegistry(homeDirectory: homeDirectory)
+        var needsReconciliation = rootEvent || ClaudeSessionRegistry(homeDirectory: homeDirectory)
             .needsDiscovery(for: paths, processes: processes)
 
-        if paths.contains(where: goalRegistry.containsEventPath) {
+        if rootEvent || paths.contains(where: goalRegistry.containsEventPath) {
             refreshActiveCodexGoals()
         }
 
@@ -95,6 +123,7 @@ public actor LiveActivityEngine {
 
             guard FileManager.default.fileExists(atPath: path) else {
                 incrementalScanner.forget(url: url)
+                transcriptSessions = transcriptSessions.filter { $0.value.transcriptPath != path }
                 continue
             }
 
@@ -132,7 +161,7 @@ public actor LiveActivityEngine {
             }
         }
 
-        let now = Date()
+        let now = now()
         let hookKeys = Set(hookRecords.map { SessionKey(kind: $0.kind, id: $0.sessionID) })
         if !hookKeys.subtracting(knownHookSessions).isEmpty {
             needsReconciliation = true
@@ -161,13 +190,21 @@ public actor LiveActivityEngine {
 
     /// Recheck only already-bound transcript files, including idle sessions so
     /// a missed task-start event is repaired as well as a missed task completion.
-    public func recheckTrackedTranscripts() -> LiveActivityState {
+    public func recheckTrackedTranscripts(validateProcesses: Bool = false) -> LiveActivityState {
+        if validateProcesses {
+            unavailableProcessIDs = Set(processes.filter { process in
+                !ProcessLiveness.canMakeProgress(process.id, startedAt: process.startedAt)
+            }.map(\.id))
+        }
+        hookCache.refresh()
+        refreshActiveCodexGoals()
         let trackedSessions = transcriptSessions
-        let hookRecords = hookStore.readAll()
+        let hookRecords = hookCache.records
 
         for (key, tracked) in trackedSessions {
             let url = URL(fileURLWithPath: tracked.transcriptPath)
             guard let result = incrementalScanner.consume(url: url, kind: key.kind, hooks: hookRecords) else {
+                if !FileManager.default.fileExists(atPath: url.path) { transcriptSessions.removeValue(forKey: key) }
                 continue
             }
 
@@ -209,9 +246,13 @@ public actor LiveActivityEngine {
         }
 
         processes.removeAll { $0.id == processID }
+        for tracked in transcriptSessions.values where tracked.activity.processID == processID {
+            incrementalScanner.forget(url: URL(fileURLWithPath: tracked.transcriptPath))
+        }
         transcriptSessions = transcriptSessions.filter { _, tracked in
             tracked.activity.processID != processID
         }
+        hookCache.refresh()
         return makeState(acceptRecentUnmatched: false, needsProcessReconciliation: false)
     }
 
@@ -219,10 +260,11 @@ public actor LiveActivityEngine {
         acceptRecentUnmatched: Bool,
         needsProcessReconciliation: Bool
     ) -> LiveActivityState {
-        let now = Date()
+        let now = now()
         let freshInterval: TimeInterval = 5
-        let hookRecords = hookStore.readAll()
+        let hookRecords = hookCache.records
         refreshHookProcessLinks(records: hookRecords)
+        var leaseKeys = Set<SessionKey>()
 
         let statuses = AgentKind.allCases.map { kind in
             let kindProcesses = processes.filter { $0.kind == kind }
@@ -235,7 +277,8 @@ public actor LiveActivityEngine {
                     processID: linkedProcessID
                 )
                 let isFresh = now.timeIntervalSince(record.updatedAt) < freshInterval
-                guard matches || (acceptRecentUnmatched && isFresh) else { return nil }
+                guard !unavailableProcessIDs.contains(linkedProcessID ?? -1),
+                      matches || (acceptRecentUnmatched && isFresh) else { return nil }
 
                 return AgentSessionActivity(
                     id: record.sessionID,
@@ -259,7 +302,8 @@ public actor LiveActivityEngine {
                     processID: session.processID
                 )
                 let isFresh = now.timeIntervalSince(session.updatedAt) < freshInterval
-                guard matches || (acceptRecentUnmatched && isFresh) else { return nil }
+                guard !unavailableProcessIDs.contains(session.processID ?? -1),
+                      matches || (acceptRecentUnmatched && isFresh) else { return nil }
                 return session
             }
 
@@ -282,10 +326,14 @@ public actor LiveActivityEngine {
                     named, startedAt: process?.startedAt
                 )
             }
-            let sessions = AgentActivityEvidence.applyingActiveCodexGoals(
-                merged,
-                activeGoals: activeCodexGoals
-            )
+            let validGoals = activeCodexGoals.filter { id, updated in
+                guard let session = merged.first(where: { $0.id == id }),
+                      let process = kindProcesses.first(where: { $0.id == session.processID }) else { return false }
+                return process.startedAt.map { updated.timeIntervalSince1970 >= floor($0.timeIntervalSince1970) } ?? true
+            }
+            let candidates = AgentActivityEvidence.applyingActiveCodexGoals(merged, activeGoals: validGoals)
+            leaseKeys.formUnion(candidates.map { SessionKey(kind: $0.kind, id: $0.id) })
+            let sessions = applyingProgressDeadlines(candidates, now: now)
             let state: AgentActivity
             if kindProcesses.isEmpty && sessions.isEmpty {
                 state = .offline
@@ -303,8 +351,11 @@ public actor LiveActivityEngine {
             )
         }
 
-        return LiveActivityState(
-            snapshot: AgentSnapshot(statuses: statuses),
+        progressLeases = progressLeases.filter { leaseKeys.contains($0.key) }
+        revision &+= 1
+        let state = LiveActivityState(
+            revision: revision,
+            snapshot: AgentSnapshot(capturedAt: now, statuses: statuses),
             processIDs: processes.map(\.id),
             transcriptPaths: Array(Set(
                 transcriptSessions.values.map(\.transcriptPath)
@@ -313,11 +364,35 @@ public actor LiveActivityEngine {
             goalDatabasePaths: goalRegistry.observedPaths + [titleIndex.url.path],
             needsProcessReconciliation: needsProcessReconciliation
         )
+        lastState = state
+        return state
+    }
+
+    private func applyingProgressDeadlines(_ sessions: [AgentSessionActivity], now: Date) -> [AgentSessionActivity] {
+        let elapsed = uptime()
+        let timeout = AgentActivityEvidence.inactivityTimeout
+        return sessions.map { session in
+            let key = SessionKey(kind: session.kind, id: session.id)
+            guard session.state == .working else { progressLeases.removeValue(forKey: key); return session }
+            if progressLeases[key]?.evidenceAt != session.updatedAt {
+                // A backwards wall-clock adjustment cannot indefinitely extend
+                // the same evidence. Genuine new progress can renew the lease.
+                let age = max(0, now.timeIntervalSince(session.updatedAt))
+                progressLeases[key] = ProgressLease(evidenceAt: session.updatedAt,
+                    deadline: elapsed + max(0, timeout - age))
+            }
+            let expired = elapsed >= (progressLeases[key]?.deadline ?? elapsed)
+            return AgentActivityEvidence.expiringInactiveSessions([session],
+                now: expired ? session.updatedAt.addingTimeInterval(timeout) : now).first!
+        }
     }
 
     private func refreshActiveCodexGoals() {
+        let fingerprints = goalRegistry.observedPaths.map { FileFingerprint(path: $0) }
+        guard fingerprints != goalFingerprints else { return }
         if let goals = try? goalRegistry.readActiveGoals() {
             activeCodexGoals = goals
+            goalFingerprints = fingerprints
         }
     }
 

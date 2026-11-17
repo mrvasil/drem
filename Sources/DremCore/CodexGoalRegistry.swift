@@ -12,7 +12,9 @@ public struct CodexGoalRegistry: Sendable {
 
     public var observedPaths: [String] {
         let path = databaseURL.standardizedFileURL.path
-        return [path, path + "-wal", path + "-shm"]
+        // SHM is reader coordination, not goal content. Watching it can turn
+        // our own read-only query into another read event indefinitely.
+        return [path, path + "-wal"]
     }
 
     public func containsEventPath(_ path: String) -> Bool {

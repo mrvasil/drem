@@ -1,4 +1,4 @@
-import DremCore
+@testable import DremCore
 import Foundation
 import IOKit.pwr_mgt
 import Testing
@@ -35,6 +35,66 @@ struct AgentActivityTests {
             defer { group.cancelAll() }
             return try await group.next()!
         }
+    }
+
+    @Test
+    func initialEmptyScanFinishesLoadingAndOldRevisionsCannotRestoreWork() {
+        let monitor = AgentMonitor(startAutomatically: false)
+        func state(_ revision: UInt64, working: Bool = false) -> LiveActivityState {
+            let snapshot = AgentSnapshot(statuses: working ? [
+                AgentStatus(kind: .codex, state: .working, runningProcessCount: 1, sessions: [])
+            ] : AgentSnapshot.empty.statuses)
+            return LiveActivityState(revision: revision, snapshot: snapshot, processIDs: [],
+                transcriptPaths: [], goalDatabasePaths: [], needsProcessReconciliation: false)
+        }
+        monitor.apply(state(1))
+        #expect(monitor.snapshot.capturedAt != .distantPast)
+        monitor.apply(state(2, working: true))
+        #expect(monitor.snapshot.hasWorkingAgent)
+        monitor.apply(state(4))
+        monitor.apply(state(3, working: true))
+        #expect(!monitor.snapshot.hasWorkingAgent)
+    }
+
+    @Test
+    func inactivityDeadlineReleasesActualKernelAssertions() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("Drem-Expiry-\(UUID())")
+        let directory = home.appendingPathComponent(".codex/sessions")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let log = directory.appendingPathComponent("expiry.jsonl")
+        try Data("""
+        {"type":"session_meta","payload":{"id":"expiry","cwd":"/tmp/expiry"}}
+        {"timestamp":"2026-09-13T10:00:00Z","type":"event_msg","payload":{"type":"task_started"}}
+
+        """.utf8).write(to: log)
+        let process = DetectedAgentProcess(id: 99117, parentPID: 1, kind: .codex, elapsed: "01:00", state: "S",
+            command: "codex", openTranscriptPaths: [log.path])
+        let current = LiveActivityEngine(homeDirectory: home, now: { Date(timeIntervalSince1970: 1_789_293_601) })
+        let expired = LiveActivityEngine(homeDirectory: home, now: { Date(timeIntervalSince1970: 1_789_294_500) })
+        let suite = "DremExpiry.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: KeepAwakeDefaultsKey.allowDisplaySleep)
+        var lidWrites: [Bool] = []
+        let manager = KeepAwakeManager(defaults: defaults, monitorSystem: false,
+            clamshellWrite: { enabled, completion in lidWrites.append(enabled); completion(true) },
+            clamshellRestoreSync: { true }, clamshellConfigured: true, batterySnapshot: { nil })
+        defer { manager.deactivate(reason: .quit) }
+        manager.recoverIfNeeded()
+        let working = await current.reconcile(processes: [process]).snapshot.hasWorkingAgent
+        let before = try kernelAssertionIDs()
+        manager.agentActivityDidChange(hasWorkingAgent: working)
+        manager.whileAgentsWork = true
+        let owned = try kernelAssertionIDs().subtracting(before)
+        await drainMainQueue()
+        #expect(owned.count == 2)
+        #expect(lidWrites == [true])
+        manager.agentActivityDidChange(hasWorkingAgent: await expired.reconcile(processes: [process]).snapshot.hasWorkingAgent)
+        await drainMainQueue()
+        #expect(!manager.isActive)
+        #expect(lidWrites == [true, false])
+        #expect(owned.isDisjoint(with: try kernelAssertionIDs()))
     }
 
     @Test

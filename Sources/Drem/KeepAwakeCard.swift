@@ -213,7 +213,8 @@ struct KeepAwakeSettings: View {
             }
             Section {
                 Toggle("Слегка двигать указатель", isOn: $jiggle)
-                if jiggle {
+                    .disabled(awake.whileAgentsWork)
+                if jiggle && !awake.whileAgentsWork {
                     Picker("Интервал", selection: $jiggleInterval) {
                         ForEach(KeepAwakePolicy.allowedMouseJiggleIntervals, id: \.self) { Text("\($0) мин").tag($0) }
                     }
@@ -222,7 +223,9 @@ struct KeepAwakeSettings: View {
                     }
                 }
             } header: { Text("Указатель") } footer: {
-                Text("Не требуется для удержания сна. Нужен только приложениям, отслеживающим движение мыши.")
+                Text(awake.whileAgentsWork
+                     ? "В режиме агентов движение указателя отключено, чтобы после последней задачи Mac вовремя возвращался к обычному сну."
+                     : "Не требуется для удержания сна. Нужен только приложениям, отслеживающим движение мыши.")
             }
         }.formStyle(.grouped)
     }

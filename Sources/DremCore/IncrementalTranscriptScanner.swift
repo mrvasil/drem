@@ -15,6 +15,7 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
 
     private struct Cursor {
         var offset: UInt64
+        var fingerprint: FileFingerprint
         var remainder: Data
         let metadata: Metadata
         var state: AgentActivity
@@ -39,16 +40,17 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
         defer { lock.unlock() }
 
         let path = url.standardizedFileURL.path
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-              let sizeNumber = attributes[.size] as? NSNumber else {
+        guard let fingerprint = FileFingerprint(path: path) else {
             cursors.removeValue(forKey: path)
             return nil
         }
 
-        let size = sizeNumber.uint64Value
-        let modifiedAt = attributes[.modificationDate] as? Date ?? Date()
+        let size = fingerprint.size
+        let modifiedAt = fingerprint.modified
 
-        if var cursor = cursors[path], size >= cursor.offset {
+        if var cursor = cursors[path], fingerprint.identity == cursor.fingerprint.identity,
+           size >= cursor.offset, size - cursor.offset <= UInt64(tailLimit),
+           size != cursor.offset || fingerprint == cursor.fingerprint {
             if size == cursor.offset {
                 return makeResult(
                     metadata: cursor.metadata, kind: kind, state: cursor.state,
@@ -59,6 +61,7 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
             guard let appended = read(url: url, from: cursor.offset, count: size - cursor.offset) else { return nil }
             let bytesRead = appended.count
             cursor.offset += UInt64(bytesRead)
+            cursor.fingerprint = fingerprint
 
             let combined = cursor.remainder + appended
             let split = completeJSONLines(in: combined)
@@ -119,6 +122,7 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
 
         cursors[path] = Cursor(
             offset: size,
+            fingerprint: fingerprint,
             remainder: initial.remainder,
             metadata: metadata,
             state: state,
@@ -138,6 +142,11 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
             detail: detail,
             sessionTitle: sessionTitle
         )
+    }
+
+    func retain(paths: Set<String>) {
+        lock.lock(); defer { lock.unlock() }
+        cursors = cursors.filter { paths.contains($0.key) }
     }
 
     public func forget(url: URL) {

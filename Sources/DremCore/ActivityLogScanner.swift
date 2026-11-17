@@ -12,21 +12,20 @@ struct TranscriptActivityEvidence {
 
     init(state: AgentActivity, timestamp: String?) {
         self.state = state
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        self.timestamp = timestamp.flatMap {
-            formatter.date(from: $0) ?? ISO8601DateFormatter().date(from: $0)
-        }
+        self.timestamp = ActivityTimestamp.parse(timestamp)
     }
 }
 
 public struct ActivityLogScanner: Sendable {
     private let homeDirectory: URL
+    private let now: @Sendable () -> Date
     private let tailLimit = 4 * 1_024 * 1_024
     private var fileManager: FileManager { .default }
 
-    public init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) {
+    public init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+                now: @escaping @Sendable () -> Date = { Date() }) {
         self.homeDirectory = homeDirectory
+        self.now = now
     }
 
     public func scan() throws -> AgentSnapshot {
@@ -52,9 +51,10 @@ public struct ActivityLogScanner: Sendable {
     }
 
     public func scanTranscriptRecords(
-        processes: [DetectedAgentProcess]
+        processes: [DetectedAgentProcess],
+        hooks suppliedHooks: [HookStateRecord]? = nil
     ) -> [TranscriptActivityRecord] {
-        let hooks = HookStateStore(homeDirectory: homeDirectory).readAll()
+        let hooks = suppliedHooks ?? HookStateStore(homeDirectory: homeDirectory).readAll()
         return AgentKind.allCases.flatMap { kind in
             scanTranscripts(
                 kind: kind,
@@ -84,9 +84,13 @@ public struct ActivityLogScanner: Sendable {
                 session, startedAt: kindProcesses.first { $0.id == session.processID }?.startedAt
             )
         }
-        let sessions = AgentActivityEvidence.applyingActiveCodexGoals(
-            merged,
-            activeGoals: activeCodexGoals
+        let validGoals = activeCodexGoals.filter { id, updated in
+            guard let session = merged.first(where: { $0.id == id }),
+                  let process = kindProcesses.first(where: { $0.id == session.processID }) else { return false }
+            return process.startedAt.map { updated.timeIntervalSince1970 >= floor($0.timeIntervalSince1970) } ?? true
+        }
+        let sessions = AgentActivityEvidence.expiringInactiveSessions(
+            AgentActivityEvidence.applyingActiveCodexGoals(merged, activeGoals: validGoals), now: now()
         )
 
         return AgentStatus(

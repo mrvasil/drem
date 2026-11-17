@@ -37,7 +37,7 @@ struct SessionIdentityTests {
             id: 303, parentPID: 1, kind: .codex, elapsed: "01:00", state: "S", command: "codex",
             workingDirectory: "/tmp/split-project", openTranscriptPaths: [log.path]
         )
-        let engine = LiveActivityEngine(homeDirectory: home)
+        let engine = LiveActivityEngine(homeDirectory: home, now: { Date(timeIntervalSince1970: 1789371971) })
         let initial = await engine.reconcile(processes: [process])
         #expect(!initial.snapshot.hasWorkingAgent)
 
@@ -94,12 +94,12 @@ struct SessionIdentityTests {
         for index in 0..<41 {
             try Data("{}\n".utf8).write(to: directory.appendingPathComponent("history-\(index).jsonl"))
         }
-        let engine = LiveActivityEngine(homeDirectory: home)
+        let engine = LiveActivityEngine(homeDirectory: home, now: { Date(timeIntervalSince1970: 1577923201) })
         let state = await engine.reconcile(processes: processes)
         #expect(state.snapshot.workingCount == (olderIsWorking ? 2 : 1))
         #expect(Set(state.snapshot.status(for: .codex).sessions.map(\.id)) == ["older", "newer"])
         #expect(Set(state.transcriptPaths).isSuperset(of: processes.flatMap(\.openTranscriptPaths)))
-        let fallback = ActivityLogScanner(homeDirectory: home).scan(processes: processes)
+        let fallback = ActivityLogScanner(homeDirectory: home, now: { Date(timeIntervalSince1970: 1_577_923_201) }).scan(processes: processes)
         #expect(fallback.workingCount == (olderIsWorking ? 2 : 1))
     }
 
@@ -118,7 +118,7 @@ struct SessionIdentityTests {
             workingDirectory: "/tmp/new-project",
             openTranscriptPaths: [home.appendingPathComponent(".codex/sessions/rollout-2020-01-01T00-00-00-renamed-session.jsonl").path]
         )
-        let engine = LiveActivityEngine(homeDirectory: home)
+        let engine = LiveActivityEngine(homeDirectory: home, now: { Date(timeIntervalSince1970: 1577836801) })
         let initial = await engine.reconcile(processes: [process])
         #expect(initial.snapshot.workingCount == 1)
         #expect(initial.snapshot.status(for: .codex).sessions.first?.processID == 101)
@@ -155,7 +155,7 @@ struct SessionIdentityTests {
             ))
         }
 
-        let engine = LiveActivityEngine(homeDirectory: home)
+        let engine = LiveActivityEngine(homeDirectory: home, now: { Date(timeIntervalSince1970: 1577923201) })
         let initial = await engine.reconcile(processes: processes)
         #expect(initial.snapshot.workingCount == 1)
         #expect(initial.snapshot.status(for: .codex).sessions.map(\.id) == ["active"])

@@ -95,7 +95,7 @@ struct CompactionTests {
         let store = HookStateStore(homeDirectory: home)
         let date = try #require(ISO8601DateFormatter().date(from: "2026-09-18T12:00:01Z"))
         try store.record(input: input("PreCompact", trigger: trigger), kind: kind, processID: 303, now: date)
-        let engine = LiveActivityEngine(homeDirectory: home)
+        let engine = LiveActivityEngine(homeDirectory: home, now: { date.addingTimeInterval(1) })
         #expect(await engine.reconcile(processes: [process]).snapshot.workingCount == 1)
         // Prime the incremental cursor, then flush the synthetic summary alone.
         _ = await engine.handleFileEvents([log.path])
@@ -109,9 +109,9 @@ struct CompactionTests {
         #expect(await engine.handleFileEvents([log.path]).snapshot.workingCount == 1,
                 "A compaction summary is not completion of the user's task")
         #expect(await engine.recheckTrackedTranscripts().snapshot.workingCount == 1)
-        #expect(await LiveActivityEngine(homeDirectory: home).reconcile(processes: [process]).snapshot.workingCount == 1,
+        #expect(await LiveActivityEngine(homeDirectory: home, now: { date.addingTimeInterval(1) }).reconcile(processes: [process]).snapshot.workingCount == 1,
                 "Restarting drem mid-compaction must preserve work")
-        #expect(ActivityLogScanner(homeDirectory: home).scan(processes: [process]).workingCount == 1)
+        #expect(ActivityLogScanner(homeDirectory: home, now: { date.addingTimeInterval(1) }).scan(processes: [process]).workingCount == 1)
 
         if kind == .codex {
             for (index, event) in ["task_complete", "turn_aborted"].enumerated() {

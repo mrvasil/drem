@@ -146,3 +146,13 @@ The project was developed locally before its first Git publication.
 Those builds introduced event-driven Codex/Claude monitoring, manual and
 agent-driven keep-awake sessions, closed-lid operation and display restoration.
 This repository does not invent Git tags or release artifacts for that history.
+
+## Надёжность активности и восстановления сна — 2026-11-17
+
+- Ограничено удержание молчащей сессии: 15 минут без прогресса, с монотонной защитой.
+- Устранены повторные чтения hook JSON на посторонние события и создание форматтеров дат.
+- Исправлены замена/удаление журналов, контроль остановленных процессов и пропущенных событий целей.
+- Восстановление сна учитывает неопределённый результат, ограниченные повторы и порядок callbacks;
+  проверка sudo больше не записывает настройку сна.
+- Добавлены lifecycle-регрессии, проверка освобождения реальных IOKit assertions и benchmark.
+- В режиме агентов отключена имитация движения указателя, отодвигавшая системный таймер сна.

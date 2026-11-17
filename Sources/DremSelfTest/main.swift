@@ -508,7 +508,7 @@ expect(lidState.request(true) == nil, "new task during restoration is queued")
 expect(lidState.complete(success: true) == true, "new task re-enables after restoration completes")
 expect(lidState.complete(success: true) == nil && lidState.active, "latest desired state wins")
 expect(lidState.request(false) == false, "cleanup requests restoration")
-expect(lidState.complete(success: false) == nil && lidState.active, "failed restore remains visible without a retry loop")
+expect(lidState.complete(success: false) == nil && !lidState.active && lidState.restorationRequired, "failed restore remains uncertain without a retry loop")
 expect(lidState.request(false) == false, "explicit cleanup can retry a failed restore")
 expect(lidState.complete(success: true) == nil && !lidState.active, "retry releases lid protection")
 

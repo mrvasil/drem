@@ -103,20 +103,24 @@ final class FileSystemEventWatcher {
         stop()
     }
 
-    private func receive(eventPaths: UnsafeMutableRawPointer, count: Int) {
+    private func receive(eventPaths: UnsafeMutableRawPointer, flags: UnsafePointer<FSEventStreamEventFlags>, count: Int) {
         let array = unsafeBitCast(eventPaths, to: NSArray.self)
-        let paths = array.prefix(count).compactMap { $0 as? String }
-        if !paths.isEmpty {
-            handler(paths)
+        var changed = array.prefix(count).compactMap { $0 as? String }
+        let recoveryFlags = FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs |
+            kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped |
+            kFSEventStreamEventFlagRootChanged)
+        if (0..<count).contains(where: { flags[$0] & recoveryFlags != 0 }) {
+            changed.append(contentsOf: paths)
         }
+        if !changed.isEmpty { handler(changed) }
     }
 
     private static let callback: FSEventStreamCallback = {
-        _, clientInfo, count, eventPaths, _, _ in
+        _, clientInfo, count, eventPaths, flags, _ in
         guard let clientInfo else { return }
         let watcher = Unmanaged<FileSystemEventWatcher>
             .fromOpaque(clientInfo)
             .takeUnretainedValue()
-        watcher.receive(eventPaths: eventPaths, count: count)
+        watcher.receive(eventPaths: eventPaths, flags: flags, count: count)
     }
 }

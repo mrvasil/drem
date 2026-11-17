@@ -92,7 +92,12 @@ public struct KeepAwakeClamshellState: Sendable {
     public private(set) var active = false
     public private(set) var pending: Bool?
 
-    public init() {}
+    /// An interrupted or failed enable can still have changed the global switch.
+    public private(set) var restorationRequired: Bool
+
+    public init(restorationRequired: Bool = false) {
+        self.restorationRequired = restorationRequired
+    }
 
     public mutating func request(_ enabled: Bool) -> Bool? {
         desired = enabled
@@ -102,14 +107,24 @@ public struct KeepAwakeClamshellState: Sendable {
     public mutating func complete(success: Bool) -> Bool? {
         guard let target = pending else { return nil }
         pending = nil
-        if success { active = target }
-        // Failed writes are surfaced to the user; never spin on a failed sudo.
-        return success ? nextOperation() : nil
+        if success {
+            active = target
+            restorationRequired = target
+        } else {
+            // A failed stop may already have stopped its guard; its old active
+            // value no longer proves that closed-lid protection is present.
+            active = false
+        }
+        // Reconcile newer demand, but never retry a failed write to the same
+        // target here (the owner bounds retries).
+        return success || target != desired ? nextOperation() : nil
     }
 
     private mutating func nextOperation() -> Bool? {
-        guard pending == nil, desired != active else { return nil }
+        guard pending == nil,
+              desired != active || (!desired && restorationRequired) else { return nil }
         pending = desired
+        if desired { restorationRequired = true }
         return desired
     }
 }
@@ -134,7 +149,20 @@ public enum KeepAwakePolicy {
 
 public enum KeepAwakeSudoersSupport {
     public static func sleepDisabled(inPmsetOutput output: String) -> Bool {
-        output.range(of: #"SleepDisabled\s+1"#, options: .regularExpression) != nil
+        sleepDisabledState(inPmsetOutput: output) == true
+    }
+
+    /// Missing, malformed or conflicting data is not evidence that sleep works.
+    public static func sleepDisabledState(inPmsetOutput output: String) -> Bool? {
+        let lines = output.split(whereSeparator: \.isNewline).map {
+            $0.split(whereSeparator: \.isWhitespace)
+        }.filter { $0.first == "SleepDisabled" }
+        guard lines.count == 1, let fields = lines.first, fields.count == 2 else { return nil }
+        switch fields[1] {
+        case "0": return false
+        case "1": return true
+        default: return nil
+        }
     }
 
     /// The uid form is deliberately used instead of a username: a uid is only

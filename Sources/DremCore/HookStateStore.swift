@@ -132,9 +132,7 @@ public struct HookStateStore: Sendable {
         // hook timestamps allow the earlier summary to win the merge.
         encoder.dateEncodingStrategy = .custom { date, encoder in
             var value = encoder.singleValueContainer()
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            try value.encode(formatter.string(from: date))
+            try value.encode(ActivityTimestamp.string(date))
         }
         let data = try encoder.encode(record)
         try data.write(to: file, options: .atomic)
@@ -193,7 +191,7 @@ public struct HookStateStore: Sendable {
         }
     }
 
-    private func readRecord(at file: URL) -> HookStateRecord? {
+    func readRecord(at file: URL) -> HookStateRecord? {
         guard let data = try? Data(contentsOf: file) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in

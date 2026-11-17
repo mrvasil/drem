@@ -83,6 +83,24 @@ public enum AgentActivityEvidence {
             workingDirectory: session.workingDirectory, sessionTitle: session.sessionTitle)
     }
 
+    public static let inactivityTimeout: TimeInterval = 15 * 60
+
+    /// A live process or active goal is not an unlimited lease. Only semantic
+    /// progress renews it; file mtimes, token accounting and PID presence do not.
+    public static func expiringInactiveSessions(
+        _ sessions: [AgentSessionActivity], now: Date = Date(),
+        timeout: TimeInterval = inactivityTimeout
+    ) -> [AgentSessionActivity] {
+        sessions.map { session in
+            guard session.state == .working,
+                  now.timeIntervalSince(session.updatedAt) >= timeout else { return session }
+            return AgentSessionActivity(id: session.id, kind: session.kind, state: .idle,
+                updatedAt: session.updatedAt, projectName: session.projectName,
+                processID: session.processID, source: session.source,
+                workingDirectory: session.workingDirectory, sessionTitle: session.sessionTitle)
+        }
+    }
+
     public static func applyingActiveCodexGoals(
         _ sessions: [AgentSessionActivity],
         activeGoals: [String: Date]

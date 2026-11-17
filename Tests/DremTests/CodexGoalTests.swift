@@ -31,18 +31,18 @@ struct CodexGoalTests {
             id: 404, parentPID: 1, kind: .codex, elapsed: "01:00", state: "S", command: "codex",
             workingDirectory: "/tmp/goal-project", openTranscriptPaths: [transcript.path]
         )
-        let engine = LiveActivityEngine(homeDirectory: home)
+        let engine = LiveActivityEngine(homeDirectory: home, now: { Date(timeIntervalSince1970: 1_789_293_602) })
 
         let active = await engine.reconcile(processes: [process])
         #expect(active.snapshot.status(for: .codex).state == .working)
         #expect(active.snapshot.status(for: .codex).workingSessions.map(\.id) == [sessionID])
-        #expect(ActivityLogScanner(homeDirectory: home).scan(processes: [process]).hasWorkingAgent)
+        #expect(ActivityLogScanner(homeDirectory: home, now: { Date(timeIntervalSince1970: 1_789_293_602) }).scan(processes: [process]).hasWorkingAgent)
 
         try writeGoal(database: database, threadID: sessionID, status: "blocked")
         let stopped = await engine.handleFileEvents([database.path + "-wal"])
         #expect(stopped.snapshot.status(for: .codex).state == .idle)
         #expect(!stopped.snapshot.hasWorkingAgent)
-        #expect(!ActivityLogScanner(homeDirectory: home).scan(processes: [process]).hasWorkingAgent)
+        #expect(!ActivityLogScanner(homeDirectory: home, now: { Date(timeIntervalSince1970: 1_789_293_602) }).scan(processes: [process]).hasWorkingAgent)
     }
 
     @Test
@@ -68,7 +68,7 @@ struct CodexGoalTests {
             id: 405, parentPID: 1, kind: .codex, elapsed: "01:00", state: "S", command: "codex",
             workingDirectory: "/tmp/event-goal-project", openTranscriptPaths: [transcript.path]
         )
-        let engine = LiveActivityEngine(homeDirectory: home)
+        let engine = LiveActivityEngine(homeDirectory: home, now: { Date(timeIntervalSince1970: 1_789_293_602) })
         let initial = await engine.reconcile(processes: [process])
         #expect(!initial.snapshot.hasWorkingAgent)
 
@@ -98,6 +98,34 @@ struct CodexGoalTests {
 
         let registry = CodexGoalRegistry(homeDirectory: home)
         #expect(try registry.readActiveGoals().isEmpty)
+    }
+
+    @Test
+    func staleGoalExpiresAndMissedRegistryStopIsRepaired() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("Drem-Stale-Goal-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let directory = home.appendingPathComponent(".codex/sessions")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let transcript = directory.appendingPathComponent("goal.jsonl")
+        try Data("""
+        {"type":"session_meta","payload":{"id":"goal","cwd":"/tmp/goal"}}
+        {"timestamp":"2026-09-13T10:00:00Z","type":"event_msg","payload":{"type":"task_complete"}}
+
+        """.utf8).write(to: transcript)
+        let database = home.appendingPathComponent(".codex/goals_1.sqlite")
+        try writeGoal(database: database, threadID: "goal", status: "active")
+        let process = DetectedAgentProcess(id: 99887, parentPID: 1, kind: .codex, elapsed: "01:00", state: "S",
+            command: "codex", openTranscriptPaths: [transcript.path])
+        let expired = LiveActivityEngine(homeDirectory: home, now: { Date(timeIntervalSince1970: 1_789_294_501) })
+        #expect(!(await expired.reconcile(processes: [process])).snapshot.hasWorkingAgent)
+        let current = LiveActivityEngine(homeDirectory: home, now: { Date(timeIntervalSince1970: 1_789_293_602) })
+        #expect(await current.reconcile(processes: [process]).snapshot.hasWorkingAgent)
+        try writeGoal(database: database, threadID: "goal", status: "complete")
+        #expect(!(await current.recheckTrackedTranscripts()).snapshot.hasWorkingAgent)
+        let resumed = DetectedAgentProcess(id: 99888, parentPID: 1, kind: .codex, elapsed: "00:01", state: "S",
+            command: "codex", openTranscriptPaths: [transcript.path], startedAt: Date(timeIntervalSince1970: 1_789_293_602))
+        try writeGoal(database: database, threadID: "goal", status: "active")
+        #expect(!(await current.reconcile(processes: [resumed])).snapshot.hasWorkingAgent)
     }
 
     private func writeGoal(database: URL, threadID: String, status: String) throws {
@@ -136,8 +164,8 @@ struct CodexGoalTests {
         let statement = """
         INSERT INTO thread_goals (
             thread_id, goal_id, objective, status, created_at_ms, updated_at_ms
-        ) VALUES (?, 'goal', 'private objective', ?, 1, 2)
-        ON CONFLICT(thread_id) DO UPDATE SET status = excluded.status, updated_at_ms = 2;
+        ) VALUES (?, 'goal', 'private objective', ?, 1, 1789293601000)
+        ON CONFLICT(thread_id) DO UPDATE SET status = excluded.status, updated_at_ms = 1789293601000;
         """
         var prepared: OpaquePointer?
         guard sqlite3_prepare_v2(connection, statement, -1, &prepared, nil) == SQLITE_OK,

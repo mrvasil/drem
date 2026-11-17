@@ -28,7 +28,7 @@ struct ClaudeSessionTests {
             workingDirectory: "/tmp/project", sessionIDHint: activeID,
             startedAt: Date(timeIntervalSince1970: 1_577_836_800.25)
         )
-        let engine = LiveActivityEngine(homeDirectory: home)
+        let engine = LiveActivityEngine(homeDirectory: home, now: { Date(timeIntervalSince1970: 1_577_836_801) })
         #expect(!(await engine.reconcile(processes: [process])).snapshot.hasWorkingAgent)
         #expect(!(await engine.recheckTrackedTranscripts()).snapshot.hasWorkingAgent)
         #expect(!ActivityLogScanner(homeDirectory: home).scan(processes: [process]).hasWorkingAgent)
@@ -69,7 +69,7 @@ struct ClaudeSessionTests {
                 startedAt: Date(timeIntervalSince1970: 1_577_836_800.25 + (reusedPID && index == 0 ? 60 : 0))
             ))
         }
-        let engine = LiveActivityEngine(homeDirectory: home)
+        let engine = LiveActivityEngine(homeDirectory: home, now: { Date(timeIntervalSince1970: 1_577_923_201) })
         let initial = await engine.reconcile(processes: processes)
         #expect(initial.snapshot.status(for: .claude).workingSessions.map(\.id) == (reusedPID ? [] : [activeID]))
         #expect(initial.snapshot.status(for: .claude).workingSessions.first?.processID == (reusedPID ? nil : 1001))

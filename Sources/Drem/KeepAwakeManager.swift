@@ -23,6 +23,12 @@ final class KeepAwakeManager: ObservableObject {
         case automation
     }
 
+    struct PointerControl {
+        let location: () -> CGPoint?
+        let target: (CGPoint) -> CGPoint?
+        let move: (CGPoint) -> Bool
+    }
+
     @Published private(set) var isActive = false
     @Published private(set) var endDate: Date?
     @Published private(set) var sessionTrigger: SessionTrigger?
@@ -80,10 +86,20 @@ final class KeepAwakeManager: ObservableObject {
     private let monitorSystem: Bool
     private let clamshellWrite: (Bool, @escaping (Bool) -> Void) -> Void
     private let clamshellRestoreSync: () -> Bool
+    private let sleepDisabledState: () -> Bool?
+    private let clamshellRestoreRetryDelay: TimeInterval
+    private var clamshellRestoreRetry: DispatchWorkItem?
+    private var clamshellRestoreAttempts = 0
+    private var recoveryInProgress = false
+    private var recoveryQueryInProgress = false
+    private var clamshellOperationID: UUID?
+    private var recoveryCompletion: (() -> Void)?
     private let batterySnapshot: () -> KeepAwakeBatteryInfo?
     private var endTimer: Timer?
     private var batteryTimer: Timer?
     private var mouseJiggleTimer: Timer?
+    private var mouseJiggleGeneration = 0
+    private let pointerControl: PointerControl
     private var pendingMouseReturn: DispatchWorkItem?
     private var defaultsObserver: AnyCancellable?
     private var appActiveObserver: NSObjectProtocol?
@@ -133,6 +149,9 @@ final class KeepAwakeManager: ObservableObject {
         clamshellWrite: @escaping (Bool, @escaping (Bool) -> Void) -> Void = KeepAwakeClamshellGuard.setEnabled,
         clamshellRestoreSync: @escaping () -> Bool = KeepAwakeClamshellGuard.restoreSync,
         clamshellConfigured: Bool? = nil,
+        sleepDisabledState: @escaping () -> Bool? = { KeepAwakeSudoers.sleepDisabledState() },
+        clamshellRestoreRetryDelay: TimeInterval = 2,
+        pointerControl: PointerControl? = nil,
         batterySnapshot: @escaping () -> KeepAwakeBatteryInfo? = KeepAwakeSystemInfo.batterySnapshot
     ) {
         self.defaults = defaults
@@ -140,7 +159,17 @@ final class KeepAwakeManager: ObservableObject {
         self.clamshellWrite = clamshellWrite
         self.clamshellRestoreSync = clamshellRestoreSync
         self.batterySnapshot = batterySnapshot
+        self.sleepDisabledState = sleepDisabledState
+        self.clamshellRestoreRetryDelay = max(0.01, clamshellRestoreRetryDelay)
+        self.pointerControl = pointerControl ?? PointerControl(
+            location: { CGEvent(source: nil)?.location },
+            target: Self.mouseJiggleTarget,
+            move: Self.postMouseMove
+        )
         KeepAwakePreferences.registerDefaults(in: defaults)
+        clamshellState = KeepAwakeClamshellState(
+            restorationRequired: defaults.bool(forKey: KeepAwakeDefaultsKey.sleepDisabledFlag)
+        )
         clamshellPreferred = self.defaults.bool(
             forKey: KeepAwakeDefaultsKey.clamshellPreferred
         )
@@ -180,8 +209,10 @@ final class KeepAwakeManager: ObservableObject {
 
     deinit {
         endTimer?.invalidate()
+        clamshellRestoreRetry?.cancel()
         batteryTimer?.invalidate()
         mouseJiggleTimer?.invalidate()
+        pendingMouseReturn?.cancel()
         automationEvaluationWorkItem?.cancel()
         if let appActiveObserver { NotificationCenter.default.removeObserver(appActiveObserver) }
         if let screenParametersObserver {
@@ -314,10 +345,16 @@ final class KeepAwakeManager: ObservableObject {
         clamshellSetupInProgress = true
         clamshellSetupFailed = false
 
-        let needsRestore = self.defaults.bool(forKey: KeepAwakeDefaultsKey.sleepDisabledFlag)
+        // Drain the guard lifecycle before removing its permission. A direct
+        // pmset write could otherwise race an already queued guard enable.
+        let needsRestore = clamshellState.restorationRequired || clamshellActivationPending
+            || self.defaults.bool(forKey: KeepAwakeDefaultsKey.sleepDisabledFlag)
+        clamshellRestoreRetry?.cancel()
+        clamshellRestoreRetry = nil
+        let restore = clamshellRestoreSync
         DispatchQueue.global(qos: .userInitiated).async {
             if needsRestore {
-                guard KeepAwakeSudoers.pmsetDisableSleep(false) else {
+                guard restore() else {
                     DispatchQueue.main.async {
                         self.clamshellSetupInProgress = false
                         self.clamshellSetupFailed = true
@@ -326,6 +363,10 @@ final class KeepAwakeManager: ObservableObject {
                     return
                 }
                 DispatchQueue.main.async {
+                    self.clamshellOperationID = nil
+                    self.clamshellState = KeepAwakeClamshellState()
+                    self.clamshellActive = false
+                    self.clamshellRestoreAttempts = 0
                     self.defaults.set(false, forKey: KeepAwakeDefaultsKey.sleepDisabledFlag)
                 }
             }
@@ -344,43 +385,40 @@ final class KeepAwakeManager: ObservableObject {
 
     /// Repairs a prior crash before any automatic session can start.
     func recoverIfNeeded(completion: (() -> Void)? = nil) {
+        guard !isQuitting, !recoveryInProgress else { return }
         guard self.defaults.bool(forKey: KeepAwakeDefaultsKey.sleepDisabledFlag) else {
             finishRecovery(completion)
             return
         }
-
+        recoveryInProgress = true
+        clamshellRestoreAttempts = 0
+        recoveryCompletion = completion
+        if clamshellActivationPending {
+            // Never discard a transition that already owns a system callback.
+            // Coalesce recovery's stop and let that callback reconcile it.
+            disableClamshell(synchronous: false)
+            return
+        }
+        recoveryQueryInProgress = true
+        let query = sleepDisabledState
         DispatchQueue.global(qos: .utility).async {
-            let report = KeepAwakeShell.run("/usr/bin/pmset", ["-g"])
-            let stillDisabled = KeepAwakeSudoersSupport.sleepDisabled(inPmsetOutput: report.output)
-            if stillDisabled, KeepAwakeSudoers.pmsetDisableSleep(false) {
-                DispatchQueue.main.async {
-                    self.defaults.set(false, forKey: KeepAwakeDefaultsKey.sleepDisabledFlag)
-                    self.finishRecovery(completion)
-                }
-                return
-            }
-
+            let disabled = query()
             DispatchQueue.main.async {
-                if stillDisabled {
-                    KeepAwakeAdminShell.run(
-                        "/usr/bin/pmset disablesleep 0",
-                        prompt: "drem восстанавливает обычный режим сна после прошлого аварийного завершения."
-                    ) { ok in
-                        DispatchQueue.main.async {
-                            if ok {
-                                self.defaults.set(
-                                    false,
-                                    forKey: KeepAwakeDefaultsKey.sleepDisabledFlag
-                                )
-                            } else {
-                                self.lastError = "Не удалось восстановить сон после прошлого запуска"
-                            }
-                            self.finishRecovery(completion)
-                        }
-                    }
-                } else {
+                guard !self.isQuitting else { return }
+                self.recoveryQueryInProgress = false
+                if disabled == false {
+                    self.clamshellOperationID = nil
+                    self.clamshellState = KeepAwakeClamshellState()
+                    self.clamshellActive = false
                     self.defaults.set(false, forKey: KeepAwakeDefaultsKey.sleepDisabledFlag)
+                    let completion = self.recoveryCompletion
+                    self.recoveryCompletion = nil
+                    self.recoveryInProgress = false
                     self.finishRecovery(completion)
+                } else {
+                    // Unknown is not false. Explicitly restore through the same
+                    // serialized guard lifecycle used for ordinary shutdown.
+                    self.disableClamshell(synchronous: false)
                 }
             }
         }
@@ -393,7 +431,7 @@ final class KeepAwakeManager: ObservableObject {
     }
 
     func activate(minutes: Int, trigger: SessionTrigger) {
-        guard !isQuitting else { return }
+        guard !isQuitting, !recoveryInProgress else { return }
         // Every manual entry point (switch, hotkey, menu, launch) obeys the
         // selected agent mode instead of creating a second, indefinite owner.
         if trigger == .manual, whileAgentsWork {
@@ -733,7 +771,8 @@ final class KeepAwakeManager: ObservableObject {
         guard !isQuitting else { return }
         if isActive, !isPausedForScreenLock, clamshellRequested {
             applyClamshellPreference()
-        } else if clamshellState.desired || clamshellActive || clamshellActivationPending {
+        } else if clamshellState.desired || clamshellActive || clamshellActivationPending
+                    || clamshellState.restorationRequired {
             disableClamshell(synchronous: false)
         }
     }
@@ -790,46 +829,88 @@ final class KeepAwakeManager: ObservableObject {
     }
 
     private func enableClamshell() {
-        guard !isQuitting, isActive, clamshellRequested, !isPausedForScreenLock else { return }
+        guard !isQuitting, !recoveryInProgress, isActive, clamshellRequested,
+              !isPausedForScreenLock else { return }
         if let operation = clamshellState.request(true) { performClamshellOperation(operation) }
     }
 
     private func disableClamshell(synchronous: Bool) {
         if synchronous {
+            clamshellRestoreRetry?.cancel()
+            clamshellRestoreRetry = nil
             // The serial queue drains any pending enable before this restore.
             // Late main-queue callbacks are ignored after application quit begins.
             let ok = clamshellRestoreSync()
             if ok {
+                clamshellOperationID = nil
                 clamshellState = KeepAwakeClamshellState()
                 clamshellActive = false
                 self.defaults.set(false, forKey: KeepAwakeDefaultsKey.sleepDisabledFlag)
             } else {
                 lastError = "Не удалось восстановить обычный режим сна Mac"
             }
-        } else if let operation = clamshellState.request(false) {
-            performClamshellOperation(operation)
+        } else {
+            // The startup query owns reconciliation until its result arrives;
+            // preference changes cannot create a callback it might overwrite.
+            guard !recoveryQueryInProgress, clamshellRestoreRetry == nil,
+                  clamshellRestoreAttempts < 3 else { return }
+            if let operation = clamshellState.request(false) {
+                performClamshellOperation(operation)
+            }
         }
+    }
+
+    private func scheduleClamshellRestoreRetry() {
+        guard !isQuitting, clamshellRestoreRetry == nil,
+              clamshellRestoreAttempts < 3 else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.isQuitting else { return }
+            self.clamshellRestoreRetry = nil
+            self.disableClamshell(synchronous: false)
+        }
+        clamshellRestoreRetry = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + clamshellRestoreRetryDelay, execute: work
+        )
     }
 
     private func performClamshellOperation(_ enabled: Bool) {
         if enabled {
+            clamshellRestoreRetry?.cancel()
+            clamshellRestoreRetry = nil
+            clamshellRestoreAttempts = 0
             // Record ownership BEFORE the system write, closing the crash window
             // between pmset succeeding and its main-queue callback executing.
             self.defaults.set(true, forKey: KeepAwakeDefaultsKey.sleepDisabledFlag)
         }
-        clamshellWrite(enabled) { usedPasswordless in
-            let ok = usedPasswordless || (!enabled && KeepAwakeAdminShell.runSync(
-                "/usr/bin/pmset disablesleep 0",
-                prompt: "drem должен восстановить обычный режим сна Mac."
-            ))
+        if !enabled { clamshellRestoreAttempts += 1 }
+        let operationID = UUID()
+        clamshellOperationID = operationID
+        clamshellWrite(enabled) { ok in
             DispatchQueue.main.async {
-                guard !self.isQuitting else { return }
+                guard !self.isQuitting, self.clamshellOperationID == operationID,
+                      self.clamshellState.pending == enabled else { return }
+                self.clamshellOperationID = nil
                 let next = self.clamshellState.complete(success: ok)
                 self.clamshellActive = self.clamshellState.active
                 if ok {
                     self.defaults.set(enabled, forKey: KeepAwakeDefaultsKey.sleepDisabledFlag)
                     self.clamshellSetupRetried = false
+                    if !enabled {
+                        self.clamshellRestoreAttempts = 0
+                        if self.lastError == "Не удалось восстановить обычный режим сна Mac" {
+                            self.lastError = nil
+                        }
+                        if self.recoveryInProgress {
+                            let completion = self.recoveryCompletion
+                            self.recoveryCompletion = nil
+                            self.recoveryInProgress = false
+                            self.finishRecovery(completion)
+                        }
+                    }
                     if let next { self.performClamshellOperation(next) }
+                } else if let next {
+                    self.performClamshellOperation(next)
                 } else if enabled {
                     self.passwordlessClamshell = false
                     guard self.clamshellConfigurationRequested else { return }
@@ -841,6 +922,12 @@ final class KeepAwakeManager: ObservableObject {
                     }
                 } else {
                     self.lastError = "Не удалось восстановить обычный режим сна Mac"
+                    if self.clamshellRestoreAttempts >= 3 {
+                        self.recoveryInProgress = false
+                        self.recoveryCompletion = nil
+                    } else {
+                        self.scheduleClamshellRestoreRetry()
+                    }
                 }
             }
         }
@@ -877,11 +964,13 @@ final class KeepAwakeManager: ObservableObject {
 
     // MARK: - Optional pointer activity
 
+    private var shouldJiggleMousePointer: Bool {
+        !isQuitting && isActive && !isPausedForScreenLock && !whileAgentsWork
+            && self.defaults.bool(forKey: KeepAwakeDefaultsKey.mouseJiggleEnabled)
+    }
+
     private func syncMouseJiggleTimer() {
-        guard isActive,
-              !isPausedForScreenLock,
-              self.defaults.bool(forKey: KeepAwakeDefaultsKey.mouseJiggleEnabled)
-        else {
+        guard shouldJiggleMousePointer else {
             stopMouseJiggleTimer()
             return
         }
@@ -893,8 +982,9 @@ final class KeepAwakeManager: ObservableObject {
         if mouseJiggleTimer?.timeInterval == interval { return }
 
         stopMouseJiggleTimer()
+        let generation = mouseJiggleGeneration
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.jiggleMousePointer() }
+            Task { @MainActor [weak self] in self?.jiggleMousePointer(generation: generation) }
         }
         timer.tolerance = min(10, interval * 0.1)
         RunLoop.main.add(timer, forMode: .common)
@@ -902,29 +992,32 @@ final class KeepAwakeManager: ObservableObject {
     }
 
     private func stopMouseJiggleTimer() {
+        mouseJiggleGeneration += 1
         mouseJiggleTimer?.invalidate()
         mouseJiggleTimer = nil
         pendingMouseReturn?.cancel()
         pendingMouseReturn = nil
     }
 
-    private func jiggleMousePointer() {
-        guard isActive,
-              self.defaults.bool(forKey: KeepAwakeDefaultsKey.mouseJiggleEnabled),
-              let original = CGEvent(source: nil)?.location,
-              let target = Self.mouseJiggleTarget(from: original),
-              Self.postMouseMove(to: target) else {
+    private func jiggleMousePointer(generation: Int) {
+        guard generation == mouseJiggleGeneration else { return }
+        guard shouldJiggleMousePointer,
+              let original = pointerControl.location(),
+              let target = pointerControl.target(original),
+              pointerControl.move(target) else {
             syncMouseJiggleTimer()
             return
         }
 
         pendingMouseReturn?.cancel()
         let returnMove = DispatchWorkItem { [weak self] in
-            self?.pendingMouseReturn = nil
-            guard let current = CGEvent(source: nil)?.location,
+            guard let self, generation == self.mouseJiggleGeneration,
+                  self.shouldJiggleMousePointer else { return }
+            self.pendingMouseReturn = nil
+            guard let current = self.pointerControl.location(),
                   abs(current.x - target.x) <= 2,
                   abs(current.y - target.y) <= 2 else { return }
-            _ = Self.postMouseMove(to: original)
+            _ = self.pointerControl.move(original)
         }
         pendingMouseReturn = returnMove
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: returnMove)

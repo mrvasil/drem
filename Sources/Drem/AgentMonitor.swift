@@ -8,6 +8,8 @@ final class AgentMonitor: ObservableObject {
     @Published private(set) var isRefreshing = false
 
     private let engine = LiveActivityEngine()
+    private let eventPaths = ActivityEventPaths()
+    private var appliedRevision: UInt64 = 0
     private var recoveryTask: Task<Void, Never>?
     private var livenessTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
@@ -16,7 +18,8 @@ final class AgentMonitor: ObservableObject {
     private var pendingPaths = Set<String>()
     private var hasStarted = false
 
-    init() {
+    init(startAutomatically: Bool = true) {
+        guard startAutomatically else { return }
         Task { @MainActor [weak self] in
             self?.start()
         }
@@ -80,10 +83,17 @@ final class AgentMonitor: ObservableObject {
 
         let candidates = hookStore.observedDirectoryURLs.map(\.path) + [
             home.appendingPathComponent(".codex", isDirectory: true).path,
-            home.appendingPathComponent(".claude/projects", isDirectory: true).path,
-            home.appendingPathComponent(".claude/sessions", isDirectory: true).path
+            home.appendingPathComponent(".claude", isDirectory: true).path
         ]
-        let paths = candidates.filter { FileManager.default.fileExists(atPath: $0) }
+        // Watch the nearest existing parent as well when an agent has not yet
+        // created its directories; event routing filters unrelated home writes.
+        let paths = Array(Set(candidates.map { path in
+            var url = URL(fileURLWithPath: path)
+            while !FileManager.default.fileExists(atPath: url.path), url.path != "/" {
+                url.deleteLastPathComponent()
+            }
+            return url.path
+        }))
 
         let watcher = FileSystemEventWatcher(paths: paths) { [weak self] paths in
             Task { @MainActor [weak self] in
@@ -97,8 +107,8 @@ final class AgentMonitor: ObservableObject {
     }
 
     private func enqueue(paths: [String]) {
-        pendingPaths.formUnion(paths)
-        guard eventTask == nil else { return }
+        pendingPaths.formUnion(paths.filter(eventPaths.contains))
+        guard !pendingPaths.isEmpty, eventTask == nil else { return }
         eventTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 100_000_000)
             guard !Task.isCancelled else { return }
@@ -120,8 +130,12 @@ final class AgentMonitor: ObservableObject {
         }
     }
 
-    private func apply(_ state: LiveActivityState) {
-        snapshot = state.snapshot
+    func apply(_ state: LiveActivityState) {
+        guard state.revision > appliedRevision else { return }
+        appliedRevision = state.revision
+        if snapshot.capturedAt == .distantPast || snapshot.statuses != state.snapshot.statuses {
+            snapshot = state.snapshot
+        }
         watcher?.setTrackedFiles(state.transcriptPaths + state.goalDatabasePaths)
         syncProcessSources(with: state.processIDs)
     }
@@ -163,7 +177,7 @@ final class AgentMonitor: ObservableObject {
             apply(state)
         }
 
-        let state = await engine.recheckTrackedTranscripts()
+        let state = await engine.recheckTrackedTranscripts(validateProcesses: true)
         apply(state)
     }
 }
