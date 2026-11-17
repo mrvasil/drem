@@ -362,15 +362,6 @@ expect(KeepAwakePolicy.sanitizedDuration(17) == 0, "invalid keep-awake duration 
 expect(KeepAwakePolicy.sanitizedBatteryLimit(15) == 15, "valid battery limit")
 expect(KeepAwakePolicy.sanitizedBatteryLimit(99) == 10, "invalid battery limit falls back")
 expect(
-    KeepAwakePolicy.sanitizedMouseJiggleInterval(10) == 10,
-    "valid pointer interval"
-)
-expect(
-    KeepAwakePolicy.sanitizedMouseJiggleInterval(3) == 5,
-    "invalid pointer interval falls back"
-)
-
-expect(
     !KeepAwakeAutomationSupport.hasExternalDisplay(builtInFlags: [true]),
     "built-in display alone is not external"
 )

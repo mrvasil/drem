@@ -16,7 +16,7 @@ SwiftUI and AppKit. No account, cloud backend, telemetry, or third-party Swift
 package dependencies.
 
 The application UI is currently in Russian. Upgrading from Agent Watch imports
-sleep, appearance and recovery preferences without deleting the old settings.
+sleep and recovery preferences without deleting the old settings.
 The installer replaces old hooks while preserving unrelated handlers.
 
 <p align="center">
@@ -34,8 +34,8 @@ The installer replaces old hooks while preserving unrelated handlers.
 - Dims only the built-in display when the lid closes during an active agent
   session, then restores its previous brightness on opening.
 - Supports manual sessions, timers, battery cutoffs and a global shortcut.
-- Shows a monochrome star when the blocker is off, and your chosen icon and
-  color when it is on. “drem” uses the same star.
+- Uses one static menu-bar star and a working-session count. The popover shows
+  sleep status and the end time of a manual session.
 
 When the last task finishes, drem releases its sleep assertions and lid override.
 macOS resumes its normal sleep policy. It does not force sleep, and it cannot
@@ -105,7 +105,9 @@ lock request is reported instead of being presented as protected.
 Lifecycle hooks and filesystem events drive updates. Known logs are read
 incrementally. A 15-second watchdog checks known PIDs and appended transcript
 bytes; a full reconciliation runs at startup, on recovery/manual refresh and
-every five minutes. No full-system one-second polling loop.
+every five minutes. No full-system one-second polling loop or animated panels.
+A session stops preventing sleep after 15 minutes without semantic progress,
+including a long silent model response or command; fresh work renews it.
 
 Codex `/goal` state is read locally from `~/.codex/goals_1.sqlite`. An active
 goal keeps its bound live session working across automatic turn boundaries;

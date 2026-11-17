@@ -132,7 +132,6 @@ public struct KeepAwakeClamshellState: Sendable {
 public enum KeepAwakePolicy {
     public static let allowedDurations = [0, 15, 30, 60, 120, 240, 480]
     public static let allowedBatteryLimits = [0, 5, 10, 15, 20]
-    public static let allowedMouseJiggleIntervals = [1, 2, 5, 10, 15]
 
     public static func sanitizedDuration(_ value: Int) -> Int {
         allowedDurations.contains(value) ? value : 0
@@ -140,10 +139,6 @@ public enum KeepAwakePolicy {
 
     public static func sanitizedBatteryLimit(_ value: Int) -> Int {
         allowedBatteryLimits.contains(value) ? value : 10
-    }
-
-    public static func sanitizedMouseJiggleInterval(_ value: Int) -> Int {
-        allowedMouseJiggleIntervals.contains(value) ? value : 5
     }
 }
 

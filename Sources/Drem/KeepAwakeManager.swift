@@ -23,12 +23,6 @@ final class KeepAwakeManager: ObservableObject {
         case automation
     }
 
-    struct PointerControl {
-        let location: () -> CGPoint?
-        let target: (CGPoint) -> CGPoint?
-        let move: (CGPoint) -> Bool
-    }
-
     @Published private(set) var isActive = false
     @Published private(set) var endDate: Date?
     @Published private(set) var sessionTrigger: SessionTrigger?
@@ -39,7 +33,6 @@ final class KeepAwakeManager: ObservableObject {
     @Published private(set) var clamshellRulePresent = false
     @Published private(set) var clamshellSetupInProgress = false
     @Published private(set) var clamshellSetupFailed = false
-    @Published private(set) var accessibilityTrusted = KeepAwakeAccessibility.isTrusted
     @Published private(set) var lastError: String?
     @Published private(set) var brightnessError: String?
     @Published private(set) var hasWorkingAgent = false
@@ -97,12 +90,7 @@ final class KeepAwakeManager: ObservableObject {
     private let batterySnapshot: () -> KeepAwakeBatteryInfo?
     private var endTimer: Timer?
     private var batteryTimer: Timer?
-    private var mouseJiggleTimer: Timer?
-    private var mouseJiggleGeneration = 0
-    private let pointerControl: PointerControl
-    private var pendingMouseReturn: DispatchWorkItem?
     private var defaultsObserver: AnyCancellable?
-    private var appActiveObserver: NSObjectProtocol?
     private var screenParametersObserver: NSObjectProtocol?
     private var screenLockObservers: [NSObjectProtocol] = []
     private var powerSourceRunLoopSource: CFRunLoopSource?
@@ -151,7 +139,6 @@ final class KeepAwakeManager: ObservableObject {
         clamshellConfigured: Bool? = nil,
         sleepDisabledState: @escaping () -> Bool? = { KeepAwakeSudoers.sleepDisabledState() },
         clamshellRestoreRetryDelay: TimeInterval = 2,
-        pointerControl: PointerControl? = nil,
         batterySnapshot: @escaping () -> KeepAwakeBatteryInfo? = KeepAwakeSystemInfo.batterySnapshot
     ) {
         self.defaults = defaults
@@ -161,11 +148,6 @@ final class KeepAwakeManager: ObservableObject {
         self.batterySnapshot = batterySnapshot
         self.sleepDisabledState = sleepDisabledState
         self.clamshellRestoreRetryDelay = max(0.01, clamshellRestoreRetryDelay)
-        self.pointerControl = pointerControl ?? PointerControl(
-            location: { CGEvent(source: nil)?.location },
-            target: Self.mouseJiggleTarget,
-            move: Self.postMouseMove
-        )
         KeepAwakePreferences.registerDefaults(in: defaults)
         clamshellState = KeepAwakeClamshellState(
             restorationRequired: defaults.bool(forKey: KeepAwakeDefaultsKey.sleepDisabledFlag)
@@ -195,26 +177,13 @@ final class KeepAwakeManager: ObservableObject {
                     }
                 }
             }
-
-        appActiveObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.accessibilityTrusted = KeepAwakeAccessibility.isTrusted
-            }
-        }
     }
 
     deinit {
         endTimer?.invalidate()
         clamshellRestoreRetry?.cancel()
         batteryTimer?.invalidate()
-        mouseJiggleTimer?.invalidate()
-        pendingMouseReturn?.cancel()
         automationEvaluationWorkItem?.cancel()
-        if let appActiveObserver { NotificationCenter.default.removeObserver(appActiveObserver) }
         if let screenParametersObserver {
             NotificationCenter.default.removeObserver(screenParametersObserver)
         }
@@ -285,7 +254,6 @@ final class KeepAwakeManager: ObservableObject {
         isActive = false
         isPausedForScreenLock = false
         stopBatteryWatch()
-        stopMouseJiggleTimer()
 
         if hadSession, reason != .quit, reason != .manual {
             onSessionEnded?(reason)
@@ -297,9 +265,8 @@ final class KeepAwakeManager: ObservableObject {
         syncAutomationMonitoring()
         if isActive, !isPausedForScreenLock {
             applyAssertions()
-            checkBattery()
         }
-        syncMouseJiggleTimer()
+        syncBatteryWatch()
     }
 
     func agentActivityDidChange(hasWorkingAgent: Bool) {
@@ -315,16 +282,6 @@ final class KeepAwakeManager: ObservableObject {
     func automationPreferencesDidChange() {
         automationSuppressedUntilConditionsClear = false
         syncWithPreferences()
-    }
-
-    func refreshAccessibilityStatus() {
-        accessibilityTrusted = KeepAwakeAccessibility.isTrusted
-    }
-
-    func requestAccessibility() {
-        KeepAwakeAccessibility.request()
-        KeepAwakeAccessibility.openSettings()
-        refreshAccessibilityStatus()
     }
 
     func refreshPasswordlessStatus() {
@@ -460,9 +417,8 @@ final class KeepAwakeManager: ObservableObject {
         if !isPausedForScreenLock {
             applyAssertions()
             guard isActive else { return }
-            startBatteryWatch()
+            syncBatteryWatch()
         }
-        syncMouseJiggleTimer()
         syncClamshellDemand()
     }
 
@@ -485,7 +441,6 @@ final class KeepAwakeManager: ObservableObject {
                 activeAutomationConditions.removeAll()
                 isActive = false
                 stopBatteryWatch()
-                stopMouseJiggleTimer()
             }
         }
     }
@@ -568,7 +523,6 @@ final class KeepAwakeManager: ObservableObject {
                 disableClamshell(synchronous: false)
             }
             stopBatteryWatch()
-            stopMouseJiggleTimer()
             return
         }
 
@@ -583,8 +537,7 @@ final class KeepAwakeManager: ObservableObject {
         }
         applyAssertions()
         guard isActive else { return }
-        startBatteryWatch()
-        syncMouseJiggleTimer()
+        syncBatteryWatch()
         syncClamshellDemand()
     }
 
@@ -935,15 +888,22 @@ final class KeepAwakeManager: ObservableObject {
 
     // MARK: - Battery protection
 
-    private func startBatteryWatch() {
-        stopBatteryWatch()
+    private func syncBatteryWatch() {
+        let limit = KeepAwakePolicy.sanitizedBatteryLimit(
+            defaults.integer(forKey: KeepAwakeDefaultsKey.batteryLimit)
+        )
+        guard isActive, !isPausedForScreenLock, limit > 0 else {
+            stopBatteryWatch()
+            return
+        }
+        checkBattery()
+        guard isActive, batteryTimer == nil else { return }
         let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.checkBattery() }
         }
         timer.tolerance = 5
         RunLoop.main.add(timer, forMode: .common)
         batteryTimer = timer
-        checkBattery()
     }
 
     private func stopBatteryWatch() {
@@ -960,104 +920,5 @@ final class KeepAwakeManager: ObservableObject {
               battery.isOnBattery,
               battery.percent <= limit else { return }
         deactivate(reason: .battery)
-    }
-
-    // MARK: - Optional pointer activity
-
-    private var shouldJiggleMousePointer: Bool {
-        !isQuitting && isActive && !isPausedForScreenLock && !whileAgentsWork
-            && self.defaults.bool(forKey: KeepAwakeDefaultsKey.mouseJiggleEnabled)
-    }
-
-    private func syncMouseJiggleTimer() {
-        guard shouldJiggleMousePointer else {
-            stopMouseJiggleTimer()
-            return
-        }
-
-        let minutes = KeepAwakePolicy.sanitizedMouseJiggleInterval(
-            self.defaults.integer(forKey: KeepAwakeDefaultsKey.mouseJiggleInterval)
-        )
-        let interval = TimeInterval(minutes * 60)
-        if mouseJiggleTimer?.timeInterval == interval { return }
-
-        stopMouseJiggleTimer()
-        let generation = mouseJiggleGeneration
-        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.jiggleMousePointer(generation: generation) }
-        }
-        timer.tolerance = min(10, interval * 0.1)
-        RunLoop.main.add(timer, forMode: .common)
-        mouseJiggleTimer = timer
-    }
-
-    private func stopMouseJiggleTimer() {
-        mouseJiggleGeneration += 1
-        mouseJiggleTimer?.invalidate()
-        mouseJiggleTimer = nil
-        pendingMouseReturn?.cancel()
-        pendingMouseReturn = nil
-    }
-
-    private func jiggleMousePointer(generation: Int) {
-        guard generation == mouseJiggleGeneration else { return }
-        guard shouldJiggleMousePointer,
-              let original = pointerControl.location(),
-              let target = pointerControl.target(original),
-              pointerControl.move(target) else {
-            syncMouseJiggleTimer()
-            return
-        }
-
-        pendingMouseReturn?.cancel()
-        let returnMove = DispatchWorkItem { [weak self] in
-            guard let self, generation == self.mouseJiggleGeneration,
-                  self.shouldJiggleMousePointer else { return }
-            self.pendingMouseReturn = nil
-            guard let current = self.pointerControl.location(),
-                  abs(current.x - target.x) <= 2,
-                  abs(current.y - target.y) <= 2 else { return }
-            _ = self.pointerControl.move(original)
-        }
-        pendingMouseReturn = returnMove
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: returnMove)
-    }
-
-    private static func mouseJiggleTarget(from original: CGPoint) -> CGPoint? {
-        guard let bounds = displayBounds(containing: original) else { return nil }
-        let safe = bounds.insetBy(dx: 2, dy: 2)
-        let x = min(max(original.x, safe.minX), safe.maxX)
-        let y = min(max(original.y, safe.minY), safe.maxY)
-        if x + 1 <= safe.maxX { return CGPoint(x: x + 1, y: y) }
-        if x - 1 >= safe.minX { return CGPoint(x: x - 1, y: y) }
-        if y + 1 <= safe.maxY { return CGPoint(x: x, y: y + 1) }
-        if y - 1 >= safe.minY { return CGPoint(x: x, y: y - 1) }
-        return nil
-    }
-
-    private static func displayBounds(containing point: CGPoint) -> CGRect? {
-        var count: UInt32 = 0
-        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else {
-            return nil
-        }
-        var displays = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        guard CGGetActiveDisplayList(count, &displays, &count) == .success else { return nil }
-        for display in displays.prefix(Int(count)) {
-            let bounds = CGDisplayBounds(display)
-            if bounds.contains(point) { return bounds }
-        }
-        return nil
-    }
-
-    private static func postMouseMove(to point: CGPoint) -> Bool {
-        let source = CGEventSource(stateID: .hidSystemState)
-        guard let event = CGEvent(
-            mouseEventSource: source,
-            mouseType: .mouseMoved,
-            mouseCursorPosition: point,
-            mouseButton: .left
-        ) else { return false }
-        event.post(tap: .cghidEventTap)
-        return true
     }
 }

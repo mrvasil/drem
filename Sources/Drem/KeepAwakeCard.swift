@@ -125,24 +125,15 @@ struct KeepAwakeSettings: View {
     @AppStorage(KeepAwakeDefaultsKey.externalDisplay) private var externalDisplay = false
     @AppStorage(KeepAwakeDefaultsKey.connectedToPower) private var power = false
     @AppStorage(KeepAwakeDefaultsKey.pauseWhenLocked) private var pauseLocked = false
-    @AppStorage(KeepAwakeDefaultsKey.mouseJiggleEnabled) private var jiggle = false
-    @AppStorage(KeepAwakeDefaultsKey.mouseJiggleInterval) private var jiggleInterval = 5
     @AppStorage(KeepAwakeDefaultsKey.hotkeyEnabled) private var hotkeyEnabled = true
-    @AppStorage(KeepAwakeDefaultsKey.iconTint) private var iconTint = KeepAwakeIconTint.none.rawValue
-    @AppStorage(KeepAwakeDefaultsKey.activeIcon) private var activeIcon = KeepAwakeActiveIcon.drem.rawValue
-    @AppStorage(KeepAwakeDefaultsKey.showCountdown) private var showCountdown = false
-    @AppStorage(IslandPreferences.enabled) private var islandEnabled = false
-    @AppStorage(IslandPreferences.publicStatus) private var islandPublicStatus = true
 
     var body: some View {
         TabView {
             sleepSettings.tabItem { Label("Сон", systemImage: "moon") }
             controlSettings.tabItem { Label("Управление", systemImage: "slider.horizontal.3") }
-            appearanceSettings.tabItem { Label("Оформление", systemImage: "paintbrush") }
         }
         .padding(16)
         .frame(width: 520, height: 560)
-        .onAppear { awake.refreshAccessibilityStatus() }
         .onDisappear { if hotkey.isCapturing { hotkey.cancelCapture() } }
     }
     private var sleepSettings: some View {
@@ -195,7 +186,6 @@ struct KeepAwakeSettings: View {
         Form {
             Section("Строка меню") {
                 Toggle("Правый клик переключает режим сна", isOn: $rightClick)
-                Toggle("Показывать оставшееся время", isOn: $showCountdown)
             }
             Section("Горячая клавиша") {
                 Toggle("Включить сочетание клавиш", isOn: $hotkeyEnabled)
@@ -212,49 +202,7 @@ struct KeepAwakeSettings: View {
                 }
             }
             Section {
-                Toggle("Слегка двигать указатель", isOn: $jiggle)
-                    .disabled(awake.whileAgentsWork)
-                if jiggle && !awake.whileAgentsWork {
-                    Picker("Интервал", selection: $jiggleInterval) {
-                        ForEach(KeepAwakePolicy.allowedMouseJiggleIntervals, id: \.self) { Text("\($0) мин").tag($0) }
-                    }
-                    if !awake.accessibilityTrusted {
-                        Button("Открыть Универсальный доступ…") { awake.requestAccessibility() }
-                    }
-                }
-            } header: { Text("Указатель") } footer: {
-                Text(awake.whileAgentsWork
-                     ? "В режиме агентов движение указателя отключено, чтобы после последней задачи Mac вовремя возвращался к обычному сну."
-                     : "Не требуется для удержания сна. Нужен только приложениям, отслеживающим движение мыши.")
-            }
-        }.formStyle(.grouped)
-    }
-    private var appearanceSettings: some View {
-        Form {
-            Section {
-                Toggle("Остров у выреза", isOn: $islandEnabled)
-                Toggle("Показывать текст статусов", isOn: $islandPublicStatus)
-                    .disabled(!islandEnabled)
-                if IslandController.notchedScreen() == nil {
-                    Text("Нужен встроенный экран MacBook с вырезом.").foregroundStyle(.secondary)
-                }
-            } header: { Text("drem Island") } footer: {
-                Text("Появляется при работе агентов, в том числе поверх полноэкранных приложений. Наведите курсор для сводки, нажмите для подробностей. Смахните вверх, чтобы скрыть до следующего цикла. Текст статусов может содержать приватные сведения из чата.")
-            }
-            Section("Иконка при включённом блокировщике") {
-                Picker("Символ", selection: $activeIcon) {
-                    ForEach(KeepAwakeActiveIcon.allCases) { Text($0.title).tag($0.rawValue) }
-                }
-                Picker("Цвет", selection: $iconTint) {
-                    ForEach(KeepAwakeIconTint.allCases) { Text($0.title).tag($0.rawValue) }
-                }
-                Text("«drem» — звезда. Когда блокировщик выключен, всегда показывается монохромная звезда. Работа агентов не переопределяет выбранные символ и цвет.")
-                    .foregroundStyle(.secondary)
-            }
-            Section {
-                LabeledContent("drem", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
-                Text("Оформление следует настройкам macOS: светлая и тёмная тема, контрастность и уменьшение прозрачности.")
-                    .foregroundStyle(.secondary)
+                LabeledContent("Версия drem", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
             }
         }.formStyle(.grouped)
     }

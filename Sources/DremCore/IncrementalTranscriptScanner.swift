@@ -23,8 +23,6 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
         // Codex can flush turn_context before the first reasoning/tool event.
         // Preserve that semantic boundary across separate vnode batches.
         var acceptsWorkAfterBoundary: Bool
-        var detail: AgentActivityDetail?
-        var sessionTitle: String?
     }
 
     private let tailLimit: Int
@@ -54,8 +52,7 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
             if size == cursor.offset {
                 return makeResult(
                     metadata: cursor.metadata, kind: kind, state: cursor.state,
-                    updatedAt: cursor.activityAt, bytesRead: 0, wasIncremental: true, detail: cursor.detail,
-                    sessionTitle: cursor.sessionTitle
+                    updatedAt: cursor.activityAt, bytesRead: 0, wasIncremental: true
                 )
             }
             guard let appended = read(url: url, from: cursor.offset, count: size - cursor.offset) else { return nil }
@@ -69,8 +66,6 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
 
             if !split.text.isEmpty {
                 let objects = JSONObjects.lines(in: split.text)
-                cursor.sessionTitle = SessionTitle.consume(objects, kind: kind, previous: cursor.sessionTitle)
-                cursor.detail = AgentDetailParser.consume(objects, kind: kind, previous: cursor.detail)
                 let evidence = classify(
                     objects,
                     kind: kind,
@@ -93,9 +88,7 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
                 state: cursor.state,
                 updatedAt: cursor.activityAt,
                 bytesRead: bytesRead,
-                wasIncremental: true,
-                detail: cursor.detail,
-                sessionTitle: cursor.sessionTitle
+                wasIncremental: true
             )
         }
 
@@ -117,8 +110,6 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
         guard evidence != nil || acceptsWorkAfterBoundary else { return nil }
         let state = evidence?.state ?? .idle
         let activityAt = evidence?.timestamp ?? modifiedAt
-        let detail = AgentDetailParser.consume(objects, kind: kind)
-        let sessionTitle = SessionTitle.consume(objects, kind: kind)
 
         cursors[path] = Cursor(
             offset: size,
@@ -127,9 +118,7 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
             metadata: metadata,
             state: state,
             activityAt: activityAt,
-            acceptsWorkAfterBoundary: acceptsWorkAfterBoundary,
-            detail: detail,
-            sessionTitle: sessionTitle
+            acceptsWorkAfterBoundary: acceptsWorkAfterBoundary
         )
 
         return makeResult(
@@ -138,9 +127,7 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
             state: state,
             updatedAt: activityAt,
             bytesRead: initial.bytesRead,
-            wasIncremental: false,
-            detail: detail,
-            sessionTitle: sessionTitle
+            wasIncremental: false
         )
     }
 
@@ -161,9 +148,7 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
         state: AgentActivity,
         updatedAt: Date,
         bytesRead: Int,
-        wasIncremental: Bool,
-        detail: AgentActivityDetail?,
-        sessionTitle: String?
+        wasIncremental: Bool
     ) -> IncrementalTranscriptResult {
         IncrementalTranscriptResult(
             session: AgentSessionActivity(
@@ -173,9 +158,7 @@ public final class IncrementalTranscriptScanner: @unchecked Sendable {
                 updatedAt: updatedAt,
                 projectName: URL(fileURLWithPath: metadata.cwd).lastPathComponent,
                 processID: nil,
-                source: .transcript,
-                detail: state == .working ? detail : nil,
-                sessionTitle: sessionTitle
+                source: .transcript
             ),
             workingDirectory: URL(fileURLWithPath: metadata.cwd).standardizedFileURL.path,
             bytesRead: bytesRead,

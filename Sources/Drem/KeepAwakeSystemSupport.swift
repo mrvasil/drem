@@ -4,7 +4,6 @@
 
 import DremCore
 import AppKit
-import ApplicationServices
 import Darwin
 import Foundation
 import IOKit.ps
@@ -569,21 +568,5 @@ enum KeepAwakeNotifier {
                 }
             }
         }
-    }
-}
-
-enum KeepAwakeAccessibility {
-    static var isTrusted: Bool { AXIsProcessTrusted() }
-
-    static func request() {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-        _ = AXIsProcessTrustedWithOptions(options as CFDictionary)
-    }
-
-    static func openSettings() {
-        guard let url = URL(
-            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-        ) else { return }
-        NSWorkspace.shared.open(url)
     }
 }

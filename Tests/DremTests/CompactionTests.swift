@@ -23,7 +23,7 @@ struct CompactionTests {
         try store.record(input: input("PreCompact", trigger: trigger), kind: kind, processID: 303)
         #expect(store.readAll().first?.state == .working, "Compacting is work, even from an idle prompt")
         #expect(store.readAll().first?.eventName == "PreCompact")
-        #expect(store.readAll().first?.detail?.action == .compacting)
+        #expect(store.readAll().first?.compactionStartedAt != nil)
 
         try store.record(input: input("PostCompact", trigger: trigger), kind: kind, processID: 303)
         let expected: AgentActivity = trigger == "auto" ? .working : .idle

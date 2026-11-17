@@ -12,9 +12,6 @@ final class LidStateMonitor {
     private var observers: [UUID: (Bool?) -> Void] = [:]
     private(set) var currentState: Bool?
 
-    /// A read of the existing kernel service, without publishing a new event.
-    var liveState: Bool? { sensor?.currentState }
-
     @discardableResult
     func observe(_ handler: @escaping (Bool?) -> Void) -> UUID {
         let id = UUID()

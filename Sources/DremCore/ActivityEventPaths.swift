@@ -25,6 +25,5 @@ public struct ActivityEventPaths: Sendable {
         if path.hasPrefix(claude + "/sessions/") { return path.hasSuffix(".json") }
         if hooks.contains(where: { path.hasPrefix($0 + "/") }) { return path.hasSuffix(".json") }
         return path == codex + "/goals_1.sqlite" || path == codex + "/goals_1.sqlite-wal"
-            || path == codex + "/session_index.jsonl"
     }
 }

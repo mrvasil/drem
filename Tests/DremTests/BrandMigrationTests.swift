@@ -8,8 +8,6 @@ struct BrandMigrationTests {
         let legacy: [String: Any] = [
             "keepAwakeWhileAgentsWork": true,
             "keepAwakeClamshellPreferred": true,
-            "keepAwakeActiveIcon": "agentWatch",
-            "keepAwakeIconTint": "orange",
             "agentWatchDisabledSleep": true,
             "closedLidBrightnessRestore": brightness,
             "keepAwakeShortcut": "control+option+command:40",
@@ -18,29 +16,25 @@ struct BrandMigrationTests {
         let result = DremMigration.mergedPreferences(legacy: legacy, current: [:])
         #expect(result["keepAwakeWhileAgentsWork"] as? Bool == true)
         #expect(result["keepAwakeClamshellPreferred"] as? Bool == true)
-        #expect(result["keepAwakeActiveIcon"] as? String == "drem")
-        #expect(result["keepAwakeIconTint"] as? String == "orange")
         #expect(result["dremDisabledSleep"] as? Bool == true)
         #expect(result["agentWatchDisabledSleep"] == nil)
         #expect(result["closedLidBrightnessRestore"] as? Data == brightness)
         #expect(result["batteryLimitPercent"] as? Int == 15)
         #expect(result["keepAwakeShortcut"] as? String == "control+option+command:40")
-        #expect(legacy["keepAwakeActiveIcon"] as? String == "agentWatch")
+        #expect(legacy["agentWatchDisabledSleep"] as? Bool == true)
     }
 
     @Test func currentChoicesWinAndCompletedMigrationDoesNotResurrectRecovery() throws {
         let legacy: [String: Any] = [
-            "keepAwakeActiveIcon": "agentWatch",
-            "keepAwakeIconTint": "orange",
             "agentWatchDisabledSleep": true,
             "closedLidBrightnessRestore": Data([1]),
+            "batteryLimitPercent": 10,
         ]
         var migrated = DremMigration.mergedPreferences(
             legacy: legacy,
-            current: ["keepAwakeActiveIcon": "moon", "keepAwakeIconTint": "blue", "dremDisabledSleep": false]
+            current: ["batteryLimitPercent": 20, "dremDisabledSleep": false]
         )
-        #expect(migrated["keepAwakeActiveIcon"] as? String == "moon")
-        #expect(migrated["keepAwakeIconTint"] as? String == "blue")
+        #expect(migrated["batteryLimitPercent"] as? Int == 20)
         #expect(migrated["dremDisabledSleep"] as? Bool == false)
         migrated.removeValue(forKey: "closedLidBrightnessRestore")
         let again = DremMigration.mergedPreferences(legacy: legacy, current: migrated)
@@ -57,9 +51,9 @@ struct BrandMigrationTests {
             defaults.removePersistentDomain(forName: new)
             defaults.removePersistentDomain(forName: prefix)
         }
-        defaults.setPersistentDomain(["keepAwakeActiveIcon": "agentWatch"], forName: old)
+        defaults.setPersistentDomain(["agentWatchDisabledSleep": true], forName: old)
         DremMigration.migratePreferences(defaults: defaults, from: old, to: new)
-        #expect(defaults.persistentDomain(forName: old)?["keepAwakeActiveIcon"] as? String == "agentWatch")
-        #expect(defaults.persistentDomain(forName: new)?["keepAwakeActiveIcon"] as? String == "drem")
+        #expect(defaults.persistentDomain(forName: old)?["agentWatchDisabledSleep"] as? Bool == true)
+        #expect(defaults.persistentDomain(forName: new)?["dremDisabledSleep"] as? Bool == true)
     }
 }

@@ -62,4 +62,23 @@ struct AgentMenuTests {
         #expect(presentationWithoutActivation)
         #expect(!duplicatePresentation)
     }
+
+    @Test func exactBoundProcessSuppliesRenamedProjectForPresentation() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("Drem-Project-\(UUID())")
+        let directory = home.appendingPathComponent(".codex/sessions")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let log = directory.appendingPathComponent("session.jsonl")
+        try Data("""
+        {"type":"session_meta","payload":{"id":"one","cwd":"/tmp/old-name"}}
+        {"type":"event_msg","payload":{"type":"task_started"}}
+
+        """.utf8).write(to: log)
+        let process = DetectedAgentProcess(id: 303, parentPID: 1, kind: .codex, elapsed: "01:00", state: "S", command: "codex",
+            workingDirectory: "/tmp/new-name", openTranscriptPaths: [log.path])
+        let engine = LiveActivityEngine(homeDirectory: home)
+        let result = await engine.reconcile(processes: [process])
+        #expect(result.snapshot.status(for: .codex).workingSessions.first?.projectName == "new-name")
+        #expect(result.snapshot.workingCount == 1)
+    }
 }

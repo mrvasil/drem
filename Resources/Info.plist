@@ -17,7 +17,7 @@
     <key>CFBundleShortVersionString</key>
     <string>1.6.0</string>
     <key>CFBundleVersion</key>
-    <string>17</string>
+    <string>18</string>
     <key>CFBundleIconFile</key>
     <string>Drem</string>
     <key>LSMinimumSystemVersion</key>
@@ -26,7 +26,5 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>drem переключает терминал на вкладку выбранного агента только по вашему нажатию. Содержимое терминала не читается.</string>
 </dict>
 </plist>

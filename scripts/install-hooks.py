@@ -78,8 +78,6 @@ def add_event(hooks: dict, event: str, provider: str) -> None:
         if not isinstance(group, dict) or group.get("hooks")
     ]
     group = {"hooks": [handler(provider)]}
-    if provider == "claude" and event == "Notification":
-        group["matcher"] = "^permission_prompt$"
     groups.append(group)
 
 
@@ -154,7 +152,7 @@ def main() -> int:
     install(
         INSTALL_HOME / ".claude/settings.json",
         "claude",
-        ["SessionStart", "UserPromptSubmit", "PreCompact", "PostCompact", "Stop", "StopFailure", "SessionEnd", "Notification"],
+        ["SessionStart", "UserPromptSubmit", "PreCompact", "PostCompact", "Stop", "StopFailure", "SessionEnd"],
     )
     return 0
 

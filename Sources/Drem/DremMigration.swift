@@ -14,9 +14,6 @@ enum DremMigration {
             result["dremDisabledSleep"] = saved
         }
         result.removeValue(forKey: "agentWatchDisabledSleep")
-        if result["keepAwakeActiveIcon"] as? String == "agentWatch" {
-            result["keepAwakeActiveIcon"] = "drem"
-        }
         result[marker] = true
         return result
     }

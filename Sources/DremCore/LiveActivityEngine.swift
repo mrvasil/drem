@@ -17,7 +17,6 @@ public actor LiveActivityEngine {
 
     private struct TrackedSession {
         let activity: AgentSessionActivity
-        let workingDirectory: String?
         let transcriptPath: String
     }
 
@@ -38,8 +37,6 @@ public actor LiveActivityEngine {
     private var goalFingerprints: [FileFingerprint?] = []
     private let incrementalScanner: IncrementalTranscriptScanner
     private let goalRegistry: CodexGoalRegistry
-    private let titleIndex: SessionTitleIndex
-    private var codexTitles: [String: String] = [:]
     private var processes: [DetectedAgentProcess] = []
     private var transcriptSessions: [SessionKey: TrackedSession] = [:]
     private var knownHookSessions = Set<SessionKey>()
@@ -57,7 +54,6 @@ public actor LiveActivityEngine {
         self.uptime = uptime
         incrementalScanner = IncrementalTranscriptScanner()
         goalRegistry = CodexGoalRegistry(homeDirectory: homeDirectory)
-        titleIndex = SessionTitleIndex(homeDirectory: homeDirectory)
     }
 
     public func bootstrap() throws -> LiveActivityState {
@@ -75,7 +71,6 @@ public actor LiveActivityEngine {
         unavailableProcessIDs = Set(processes.filter { $0.state.hasPrefix("T") || $0.state.hasPrefix("Z") }.map(\.id))
         hookCache.refresh()
         let hookRecords = hookCache.records
-        codexTitles = titleIndex.read()
         refreshActiveCodexGoals()
         let transcriptRecords = ActivityLogScanner(homeDirectory: homeDirectory)
             .scanTranscriptRecords(processes: processes, hooks: hookRecords)
@@ -87,7 +82,6 @@ public actor LiveActivityEngine {
                     SessionKey(kind: session.kind, id: session.id),
                     TrackedSession(
                         activity: session,
-                        workingDirectory: record.workingDirectory,
                         transcriptPath: record.transcriptPath
                     )
                 )
@@ -109,7 +103,6 @@ public actor LiveActivityEngine {
         if rootEvent || paths.contains(where: hookCache.containsEventPath)
             || paths.contains(where: { transcriptKind(for: $0) != nil }) { hookCache.refresh() }
         let hookRecords = hookCache.records
-        if paths.contains(where: titleIndex.contains) { codexTitles = titleIndex.read() }
         var needsReconciliation = rootEvent || ClaudeSessionRegistry(homeDirectory: homeDirectory)
             .needsDiscovery(for: paths, processes: processes)
 
@@ -142,13 +135,10 @@ public actor LiveActivityEngine {
                 updatedAt: result.session.updatedAt,
                 projectName: result.session.projectName,
                 processID: linkedProcessID,
-                source: result.session.source,
-                detail: result.session.detail,
-                sessionTitle: result.session.sessionTitle
+                source: result.session.source
             )
             transcriptSessions[key] = TrackedSession(
                 activity: linkedSession,
-                workingDirectory: result.workingDirectory,
                 transcriptPath: url.standardizedFileURL.path
             )
 
@@ -221,13 +211,10 @@ public actor LiveActivityEngine {
                 updatedAt: result.session.updatedAt,
                 projectName: result.session.projectName,
                 processID: linkedProcessID,
-                source: result.session.source,
-                detail: result.session.detail,
-                sessionTitle: result.session.sessionTitle
+                source: result.session.source
             )
             transcriptSessions[key] = TrackedSession(
                 activity: session,
-                workingDirectory: result.workingDirectory,
                 transcriptPath: tracked.transcriptPath
             )
         }
@@ -287,9 +274,7 @@ public actor LiveActivityEngine {
                     updatedAt: record.updatedAt,
                     projectName: URL(fileURLWithPath: record.cwd).lastPathComponent,
                     processID: linkedProcessID,
-                    source: .hook,
-                    detail: record.detail,
-                    sessionTitle: record.sessionTitle
+                    source: .hook
                 )
             }
 
@@ -309,19 +294,12 @@ public actor LiveActivityEngine {
 
             let merged = AgentActivityEvidence.merge(hooks: hooks, transcripts: transcripts).map { session in
                 let process = kindProcesses.first { $0.id == session.processID }
-                let directory = process?.workingDirectory
-                    ?? hookRecords.first { $0.kind == session.kind && $0.sessionID == session.id }?.cwd
-                    ?? transcriptSessions[SessionKey(kind: session.kind, id: session.id)]?.workingDirectory
                 // A transcript's original cwd can predate a project rename.
                 // Use only its already-bound PID; never relax identity matching.
                 let named = AgentSessionActivity(id: session.id, kind: session.kind, state: session.state,
                     updatedAt: session.updatedAt,
                     projectName: process?.workingDirectory.map { URL(fileURLWithPath: $0).lastPathComponent } ?? session.projectName,
-                    processID: session.processID, source: session.source, detail: session.detail,
-                    workingDirectory: directory,
-                    sessionTitle: session.kind == .codex ? codexTitles[session.id] : session.sessionTitle
-                        ?? transcripts.first { $0.id == session.id }?.sessionTitle
-                        ?? hookRecords.first { $0.kind == session.kind && $0.sessionID == session.id }?.sessionTitle)
+                    processID: session.processID, source: session.source)
                 return AgentActivityEvidence.forProcessLifetime(
                     named, startedAt: process?.startedAt
                 )
@@ -361,7 +339,7 @@ public actor LiveActivityEngine {
                 transcriptSessions.values.map(\.transcriptPath)
                     + processes.flatMap(\.openTranscriptPaths)
             )).sorted(),
-            goalDatabasePaths: goalRegistry.observedPaths + [titleIndex.url.path],
+            goalDatabasePaths: goalRegistry.observedPaths,
             needsProcessReconciliation: needsProcessReconciliation
         )
         lastState = state

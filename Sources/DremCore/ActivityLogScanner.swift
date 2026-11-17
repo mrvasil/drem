@@ -174,9 +174,7 @@ public struct ActivityLogScanner: Sendable {
                         updatedAt: evidence.timestamp ?? candidate.modifiedAt,
                         projectName: projectName(for: cwd),
                         processID: processID,
-                        source: .transcript,
-                        detail: evidence.state == .working ? AgentDetailParser.consume(objects, kind: kind) : nil,
-                        sessionTitle: SessionTitle.consume(objects, kind: kind)
+                        source: .transcript
                     ),
                     workingDirectory: cwd,
                     transcriptPath: candidate.url.standardizedFileURL.path

@@ -7,8 +7,6 @@ public struct HookInput: Decodable, Sendable {
     public let turnID: String?
     public let source: String?
     public let trigger: String?
-    public let sessionTitle: String?
-    public let notificationType: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
@@ -16,8 +14,6 @@ public struct HookInput: Decodable, Sendable {
         case eventName = "hook_event_name"
         case turnID = "turn_id"
         case source, trigger
-        case sessionTitle = "session_title"
-        case notificationType = "notification_type"
     }
 }
 
@@ -31,21 +27,9 @@ public struct HookStateRecord: Codable, Sendable {
     public let eventName: String
     /// State to restore after compaction. Optional for old on-disk records.
     public let compactionResumeState: AgentActivity?
-    public let sessionTitle: String?
-    public var attention: AgentAttention? = nil
-    public var attentionUpdatedAt: Date? = nil
 
     public var compactionStartedAt: Date? {
         eventName == "PreCompact" && state == .working ? updatedAt : nil
-    }
-
-    public var detail: AgentActivityDetail? {
-        guard state == .working else { return nil }
-        if let compactionStartedAt { return AgentActivityDetail(action: .compacting, confirmedAt: compactionStartedAt) }
-        guard let attention, let attentionUpdatedAt else { return nil }
-        var detail = AgentActivityDetail(confirmedAt: attentionUpdatedAt, attention: attention)
-        detail.attentionUpdatedAt = attentionUpdatedAt
-        return detail
     }
 }
 
@@ -82,12 +66,7 @@ public struct HookStateStore: Sendable {
         let previous = readRecord(at: file)
         var resumeState: AgentActivity?
         let activity: AgentActivity
-        let permission = kind == .claude && input.eventName == "Notification" && input.notificationType == "permission_prompt"
-        if permission {
-            // Presentation evidence cannot start a turn or extend its lifetime.
-            guard let previous, previous.state == .working else { return }
-            activity = previous.state
-        } else if input.eventName == "PreCompact" || input.eventName == "PostCompact" {
+        if input.eventName == "PreCompact" || input.eventName == "PostCompact" {
             // Manual /compact returns to the prompt; automatic compaction
             // continues the running task. Neither requires a new user prompt.
             resumeState = input.trigger == "manual" ? .idle
@@ -112,21 +91,16 @@ public struct HookStateStore: Sendable {
             return
         }
 
-        var record = HookStateRecord(
+        let record = HookStateRecord(
             sessionID: input.sessionID,
             kind: kind,
             state: activity,
-            updatedAt: permission ? previous!.updatedAt : now,
+            updatedAt: now,
             cwd: input.cwd,
             processID: processID,
             eventName: input.eventName,
-            compactionResumeState: resumeState,
-            sessionTitle: SessionTitle.clean(input.sessionTitle) ?? previous?.sessionTitle
+            compactionResumeState: resumeState
         )
-        if permission {
-            record.attention = .permission
-            record.attentionUpdatedAt = now
-        }
         let encoder = JSONEncoder()
         // A summary and PostCompact can be milliseconds apart. Whole-second
         // hook timestamps allow the earlier summary to win the merge.
@@ -156,9 +130,7 @@ public struct HookStateStore: Sendable {
                 updatedAt: record.updatedAt,
                 projectName: URL(fileURLWithPath: record.cwd).lastPathComponent,
                 processID: processID,
-                source: .hook,
-                detail: record.detail,
-                sessionTitle: record.sessionTitle
+                source: .hook
             )
         }
     }

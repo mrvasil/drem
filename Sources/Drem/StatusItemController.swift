@@ -46,10 +46,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
     private let presentation: AgentMenuPresentation
     private var popoverPresentationGate = PopoverPresentationGate()
     private var settingsWindow: NSWindow?
-    private var lastImageKey: String?
     private var cancellables = Set<AnyCancellable>()
-    private var defaultsObserver: NSObjectProtocol?
-    private var countdownTimer: Timer?
 
     init(monitor: AgentMonitor, keepAwake: KeepAwakeManager, awayMode: AwayModeController) {
         self.monitor = monitor
@@ -67,8 +64,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
     }
 
     deinit {
-        countdownTimer?.invalidate()
-        if let defaultsObserver { NotificationCenter.default.removeObserver(defaultsObserver) }
         NSStatusBar.system.removeStatusItem(statusItem)
     }
 
@@ -98,6 +93,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
         button.target = self
         button.action = #selector(statusItemClicked)
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        button.image = DremMark.menuImage()
         button.imagePosition = .imageLeading
         button.imageScaling = .scaleProportionallyDown
         button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
@@ -123,9 +119,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
         let show = NSMenuItem(title: "Показать агентов", action: #selector(openPopover), keyEquivalent: "1")
         show.target = self
         appMenu.addItem(show)
-        let island = NSMenuItem(title: "Показать остров", action: #selector(showIsland), keyEquivalent: "2")
-        island.target = self
-        appMenu.addItem(island)
         let settings = NSMenuItem(title: "Настройки…", action: #selector(showSettings), keyEquivalent: ",")
         settings.target = self
         appMenu.addItem(settings)
@@ -148,8 +141,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
             rootView: StatusPanel(
                 presentation: presentation, keepAwake: keepAwake, awayMode: awayMode,
                 openSettings: { [weak self] in self?.showSettings() },
-                refresh: { [weak self] in self?.refreshAgents() },
-                showIsland: { [weak self] in self?.showIsland() }
+                refresh: { [weak self] in self?.refreshAgents() }
             )
         )
         if #available(macOS 13.0, *) {
@@ -220,14 +212,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.refresh() }
             .store(in: &cancellables)
-
-        defaultsObserver = NotificationCenter.default.addObserver(
-            forName: UserDefaults.didChangeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.refresh() }
-        }
     }
 
     @objc private func statusItemClicked() {
@@ -294,10 +278,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
         )
         openItem.target = self
         menu.addItem(openItem)
-        let islandItem = NSMenuItem(title: "Показать остров", action: #selector(showIsland), keyEquivalent: "2")
-        islandItem.target = self
-        menu.addItem(islandItem)
-
         let refreshItem = NSMenuItem(
             title: "Обновить агентов",
             action: #selector(refreshAgents),
@@ -340,11 +320,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
         showPopover()
     }
 
-    @objc private func showIsland() {
-        popover.performClose(nil)
-        NotificationCenter.default.post(name: IslandPreferences.showNotification, object: nil)
-    }
-
     @objc private func refreshAgents() {
         Task { await monitor.refresh() }
     }
@@ -355,16 +330,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
 
     private func refresh() {
         guard let button = statusItem.button else { return }
-        syncCountdownTimer()
 
-        // Agent activity updates the count and tooltip, never the icon's appearance.
-        let imageKey = keepAwake.isActive
-            ? "active-\(KeepAwakeActiveIcon.current.rawValue)-\(KeepAwakeIconTint.current.rawValue)"
-            : "inactive"
-        if imageKey != lastImageKey {
-            button.image = statusImage()
-            lastImageKey = imageKey
-        }
         let title = menuTitle
         if button.title != title { button.title = title }
         let description = tooltip
@@ -373,94 +339,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
         button.imageHugsTitle = true
     }
 
-    private func syncCountdownTimer() {
-        let needed = keepAwake.isActive
-            && keepAwake.endDate != nil
-            && UserDefaults.standard.bool(forKey: KeepAwakeDefaultsKey.showCountdown)
-        guard needed else {
-            countdownTimer?.invalidate()
-            countdownTimer = nil
-            return
-        }
-        guard countdownTimer == nil else { return }
-        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.refresh() }
-        }
-        timer.tolerance = 5
-        RunLoop.main.add(timer, forMode: .common)
-        countdownTimer = timer
-    }
-
-    private func statusImage() -> NSImage? {
-        Self.statusImage(
-            isAwake: keepAwake.isActive,
-            activeIcon: KeepAwakeActiveIcon.current, tint: KeepAwakeIconTint.current
-        )
-    }
-
-    static func statusImage(isAwake: Bool,
-                            activeIcon: KeepAwakeActiveIcon, tint: KeepAwakeIconTint) -> NSImage? {
-        if !isAwake {
-            return Self.idleStatusImage()
-        }
-        if activeIcon == .drem {
-            return DremMark.menuImage(tint: Self.statusTint(tint))
-        }
-        return Self.statusSymbolImage(
-            activeIcon.systemSymbolName, tint: Self.statusTint(tint)
-        )
-    }
-
-    static func statusSymbolImage(_ symbolName: String, tint: NSColor?) -> NSImage? {
-        guard let base = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) else {
-            return nil
-        }
-        let sizeConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
-        if let tint {
-            let palette = NSImage.SymbolConfiguration(paletteColors: [tint])
-            let image = base.withSymbolConfiguration(sizeConfiguration.applying(palette))
-            image?.isTemplate = false
-            return image
-        }
-        let image = base.withSymbolConfiguration(sizeConfiguration)
-        image?.isTemplate = true
-        return image
-    }
-
-    static func idleStatusImage() -> NSImage? {
-        DremMark.menuImage()
-    }
-
-    static func statusTint(_ tint: KeepAwakeIconTint) -> NSColor? {
-        switch tint {
-        // sRGB fill sampled from the user's low-power battery reference (#F8D849).
-        // Keep the stored "orange" preference compatible with existing installs.
-        case .orange: return DremMark.batteryYellow
-        case .green: return .systemGreen
-        case .blue: return .systemBlue
-        case .purple: return .systemPurple
-        case .pink: return .systemPink
-        case .none: return nil
-        }
-    }
-
     private var menuTitle: String {
-        var parts: [String] = []
         let working = monitor.snapshot.workingCount
-        if working > 0 { parts.append("\(working)") }
-
-        if keepAwake.isActive,
-           UserDefaults.standard.bool(forKey: KeepAwakeDefaultsKey.showCountdown) {
-            if let end = keepAwake.endDate {
-                let remaining = max(0, Int(end.timeIntervalSinceNow))
-                let hours = remaining / 3600
-                let minutes = (remaining % 3600) / 60
-                parts.append(hours > 0 ? String(format: "%d:%02d", hours, minutes) : "\(max(1, minutes)) мин")
-            } else {
-                parts.append("∞")
-            }
-        }
-        return parts.joined(separator: "  ")
+        return working > 0 ? "\(working)" : ""
     }
 
     private var tooltip: String {

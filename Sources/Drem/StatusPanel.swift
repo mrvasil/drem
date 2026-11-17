@@ -42,8 +42,6 @@ struct StatusPanel: View {
     @ObservedObject var awayMode: AwayModeController
     let openSettings: () -> Void
     let refresh: () -> Void
-    let showIsland: () -> Void
-    @AppStorage(IslandPreferences.enabled) private var islandEnabled = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -57,14 +55,6 @@ struct StatusPanel: View {
                 AgentMenuRow(row: row, isLoading: presentation.state.isLoading)
             }
             Divider().padding(.vertical, 10)
-            if islandEnabled {
-                Button(action: showIsland) {
-                    Label("Показать остров", systemImage: "rectangle.topthird.inset.filled")
-                }
-                .disabled(IslandController.notchedScreen() == nil)
-                .buttonStyle(.borderless).font(.system(size: 12))
-                .padding(.bottom, 10)
-            }
             KeepAwakeControls(awake: keepAwake, awayMode: awayMode)
             if let error = presentation.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle")

@@ -35,7 +35,7 @@ class InstallerTests(unittest.TestCase):
     def test_new_install_uses_drem_and_private_permissions(self):
         result = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stderr)
-        for path, count in [(self.codex, 7), (self.claude, 8)]:
+        for path, count in [(self.codex, 7), (self.claude, 7)]:
             data = json.loads(path.read_text())
             self.assertEqual(len(data["hooks"]), count)
             self.assertIn("PreCompact", data["hooks"])
@@ -44,13 +44,13 @@ class InstallerTests(unittest.TestCase):
             for groups in data["hooks"].values():
                 self.assertIn(str(self.binary), groups[0]["hooks"][0]["command"])
 
-    def test_only_confirmed_permission_notification_is_registered(self):
+    def test_only_lifecycle_hooks_are_registered(self):
         self.assertEqual(self.run_installer().returncode, 0)
         codex = json.loads(self.codex.read_text())["hooks"]
         claude = json.loads(self.claude.read_text())["hooks"]
         self.assertNotIn("PermissionRequest", codex)
         self.assertNotIn("PermissionRequest", claude)
-        self.assertEqual(claude["Notification"][0]["matcher"], "^permission_prompt$")
+        self.assertNotIn("Notification", claude)
         self.assertNotIn("PreToolUse", claude)
         self.assertNotIn("PostToolUse", claude)
 
@@ -89,16 +89,19 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(json.loads(self.codex.read_text()), first)
         self.assertEqual(json.loads(self.claude.read_text()), first_claude)
 
-    def test_permission_registration_preserves_unrelated_notifications(self):
+    def test_upgrade_removes_old_notifications_and_preserves_unrelated_handlers(self):
         original = {"hooks": {"Notification": [{"matcher": "idle_prompt", "hooks": [
             {"type": "command", "command": "/safe/example/idle-hook"},
         ]}]}}
+        original["hooks"]["Notification"].append({"matcher": "^permission_prompt$", "hooks": [
+            {"type": "command", "command": f'"{self.binary}" claude'},
+        ]})
         self.write_config(self.claude, original)
         previous = self.claude.read_bytes()
         self.assertEqual(self.run_installer().returncode, 0)
         groups = json.loads(self.claude.read_text())["hooks"]["Notification"]
         self.assertEqual(groups[0], original["hooks"]["Notification"][0])
-        self.assertEqual(groups[1]["matcher"], "^permission_prompt$")
+        self.assertEqual(len(groups), 1)
         backups = list(self.claude.parent.glob("settings.json.drem-backup-*"))
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_bytes(), previous)
