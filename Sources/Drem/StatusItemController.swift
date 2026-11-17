@@ -46,6 +46,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
     private let presentation: AgentMenuPresentation
     private var popoverPresentationGate = PopoverPresentationGate()
     private var settingsWindow: NSWindow?
+    private var iconKeepsAwake: Bool?
     private var cancellables = Set<AnyCancellable>()
 
     init(monitor: AgentMonitor, keepAwake: KeepAwakeManager, awayMode: AwayModeController) {
@@ -93,7 +94,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
         button.target = self
         button.action = #selector(statusItemClicked)
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        button.image = DremMark.menuImage()
         button.imagePosition = .imageLeading
         button.imageScaling = .scaleProportionallyDown
         button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
@@ -331,6 +331,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate, NSWindowDelegate 
     private func refresh() {
         guard let button = statusItem.button else { return }
 
+        let keepsAwake = keepAwake.isActive && !keepAwake.isPausedForScreenLock
+        if iconKeepsAwake != keepsAwake {
+            button.image = DremMark.menuImage(tint: keepsAwake ? DremMark.batteryYellow : nil)
+            iconKeepsAwake = keepsAwake
+        }
         let title = menuTitle
         if button.title != title { button.title = title }
         let description = tooltip

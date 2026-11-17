@@ -34,7 +34,8 @@ The installer replaces old hooks while preserving unrelated handlers.
 - Dims only the built-in display when the lid closes during an active agent
   session, then restores its previous brightness on opening.
 - Supports manual sessions, timers, battery cutoffs and a global shortcut.
-- Uses one static menu-bar star and a working-session count. The popover shows
+- Uses one static star: yellow while preventing sleep, system color when off or
+  paused. A count shows working sessions. The popover shows
   sleep status and the end time of a manual session.
 
 When the last task finishes, drem releases its sleep assertions and lid override.

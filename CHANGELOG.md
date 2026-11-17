@@ -12,7 +12,9 @@ application bundle.
 - Remove session-title indexing, public-message/action/attention parsing and
   the permission notification hook. Existing unrelated hooks are preserved.
 - Remove pointer jiggling, decorative icon choices and the countdown refresh
-  timer. Keep a static monochrome star, working-agent count and session end time.
+  timer. Keep a static star, working-agent count and session end time.
+- Restore the yellow star while wake prevention is active; use the system color
+  when off or paused. Update the image only when this state changes.
 - Run the battery timer only while its cutoff is enabled and wake is held;
   reuse it across unrelated preference changes.
 
